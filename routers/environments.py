@@ -29,11 +29,16 @@ def _check_ownership(env: dict | None, user_id: str) -> dict:
     return env
 
 
+def _public(env: dict) -> dict:
+    """Strip the master admin key before returning an environment to a client."""
+    return {k: v for k, v in env.items() if k != "master_api_key"}
+
+
 @router.get("")
 async def list_environments(user: dict = Depends(get_current_user)):
     sb = get_supabase()
     result = sb.table("environments").select("*, containers(count)").eq("user_id", user["id"]).order("created_at", desc=True).execute()
-    return result.data
+    return [_public(env) for env in result.data]
 
 
 @router.post("/provision", status_code=201)
@@ -82,15 +87,15 @@ async def provision_environment(body: ProvisionRequest, user: dict = Depends(get
             }).eq("id", env_id).execute()
 
     asyncio.create_task(_provision_background())
-    return result.data[0]
+    return _public(result.data[0])
 
 
 @router.get("/{env_id}")
 async def get_environment(env_id: str, user: dict = Depends(get_current_user)):
     sb = get_supabase()
     result = sb.table("environments").select("*, containers(count)").eq("id", env_id).maybe_single().execute()
-    _check_ownership(result.data, user["id"])
-    return result.data
+    env = _check_ownership(result.data, user["id"])
+    return _public(env)
 
 
 @router.get("/{env_id}/status")

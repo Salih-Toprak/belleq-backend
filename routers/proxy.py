@@ -1,13 +1,27 @@
 import logging
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+import httpx
+from fastapi import APIRouter, Depends, HTTPException, Request, Response
 
 from auth import get_current_user
 from database import get_supabase
-from services import docker_manager
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
+
+TIMEOUT = 30.0
+HOP_BY_HOP = {
+    "connection",
+    "keep-alive",
+    "proxy-authenticate",
+    "proxy-authorization",
+    "te",
+    "trailers",
+    "transfer-encoding",
+    "upgrade",
+    "host",
+    "content-length",
+}
 
 
 def _get_owned_env(env_id: str, user_id: str) -> dict:
@@ -20,33 +34,59 @@ def _get_owned_env(env_id: str, user_id: str) -> dict:
     return result.data
 
 
-@router.get("/environments/{env_id}/proxy/stats")
-async def proxy_stats(env_id: str, user: dict = Depends(get_current_user)):
+@router.api_route(
+    "/environments/{env_id}/proxy/{master_path:path}",
+    methods=["GET", "POST", "PUT", "PATCH", "DELETE"],
+)
+async def proxy_to_master(
+    env_id: str,
+    master_path: str,
+    request: Request,
+    user: dict = Depends(get_current_user),
+):
+    """Forward an arbitrary master-container request for an owned environment.
+
+    The browser never sees the master's admin key — it is injected here from
+    the environment record, so every dashboard call is scoped to the caller's
+    own environment and authorized by their Supabase token.
+    """
     env = _get_owned_env(env_id, user["id"])
-    return await docker_manager.get_aggregate_stats(env)
 
+    if env["status"] != "ready":
+        raise HTTPException(status_code=409, detail="Environment is not ready")
+    if not env.get("public_ip"):
+        raise HTTPException(status_code=409, detail="Environment has no public IP yet")
 
-@router.get("/environments/{env_id}/proxy/docs")
-async def proxy_docs(env_id: str, user: dict = Depends(get_current_user)):
-    env = _get_owned_env(env_id, user["id"])
-    return await docker_manager.get_aggregate_docs(env)
+    target = f"http://{env['public_ip']}:{env['master_port']}/{master_path}"
+    body = await request.body()
 
+    headers = {"X-Admin-Key": env["master_api_key"]}
+    content_type = request.headers.get("content-type")
+    if content_type:
+        headers["content-type"] = content_type
 
-@router.post("/environments/{env_id}/proxy/sync")
-async def proxy_sync(env_id: str, request: Request, user: dict = Depends(get_current_user)):
-    env = _get_owned_env(env_id, user["id"])
-    body = await request.json() if await request.body() else {}
-    return await docker_manager.trigger_sync(env, source_id=body.get("source_id"))
+    try:
+        async with httpx.AsyncClient(timeout=TIMEOUT) as client:
+            upstream = await client.request(
+                request.method,
+                target,
+                params=dict(request.query_params),
+                content=body or None,
+                headers=headers,
+            )
+    except (httpx.ConnectError, httpx.ConnectTimeout, httpx.ReadTimeout):
+        logger.error("Environment %s unreachable at %s", env_id, env["public_ip"])
+        raise HTTPException(status_code=502, detail="Environment master is unreachable")
+    except httpx.HTTPError as exc:
+        logger.exception("Proxy request to environment %s failed", env_id)
+        raise HTTPException(status_code=502, detail=f"Proxy request failed: {exc}")
 
-
-@router.get("/environments/{env_id}/proxy/sources")
-async def proxy_get_sources(env_id: str, user: dict = Depends(get_current_user)):
-    env = _get_owned_env(env_id, user["id"])
-    return await docker_manager.get_sources(env)
-
-
-@router.post("/environments/{env_id}/proxy/sources")
-async def proxy_create_source(env_id: str, request: Request, user: dict = Depends(get_current_user)):
-    env = _get_owned_env(env_id, user["id"])
-    body = await request.json()
-    return await docker_manager.create_source(env, body)
+    response_headers = {
+        k: v for k, v in upstream.headers.items() if k.lower() not in HOP_BY_HOP
+    }
+    return Response(
+        content=upstream.content,
+        status_code=upstream.status_code,
+        headers=response_headers,
+        media_type=upstream.headers.get("content-type"),
+    )

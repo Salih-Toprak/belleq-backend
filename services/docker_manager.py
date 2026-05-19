@@ -45,31 +45,3 @@ async def delete_container(env: dict, container_name: str) -> bool:
     logger.info("Deleting container %s on environment %s", container_name, env["id"])
     await _request("DELETE", env, f"/master/containers/{container_name}")
     return True
-
-
-async def get_aggregate_stats(env: dict) -> dict:
-    resp = await _request("GET", env, "/master/aggregate/stats")
-    return resp.json()
-
-
-async def get_aggregate_docs(env: dict) -> dict:
-    resp = await _request("GET", env, "/master/aggregate/docs")
-    return resp.json()
-
-
-async def trigger_sync(env: dict, source_id: str | None = None) -> dict:
-    body = {}
-    if source_id:
-        body["source_id"] = source_id
-    resp = await _request("POST", env, "/master/ingestion/sync", json=body)
-    return resp.json()
-
-
-async def get_sources(env: dict) -> list:
-    resp = await _request("GET", env, "/master/sources")
-    return resp.json()
-
-
-async def create_source(env: dict, source_data: dict) -> dict:
-    resp = await _request("POST", env, "/master/sources", json=source_data)
-    return resp.json()
