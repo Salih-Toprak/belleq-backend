@@ -13,37 +13,31 @@ BOOTSTRAP_SCRIPT = """#!/bin/bash
 exec > /var/log/belleq-bootstrap.log 2>&1
 set -ex
 
-# ── Install Docker (works on Amazon Linux 2 AND Amazon Linux 2023) ───────────
-if command -v dnf &>/dev/null; then
-  dnf update -y
-  dnf install -y docker git curl ec2-instance-connect
-else
-  yum update -y
-  yum install -y docker git curl ec2-instance-connect
-fi
+# ── System update + install deps ─────────────────────────────────────────────
+dnf update -y
+dnf install -y docker git curl ec2-instance-connect
 
-# Make sure the docker service is running before anything else
+# ── Docker ───────────────────────────────────────────────────────────────────
 systemctl enable docker
 systemctl start docker
+usermod -aG docker ec2-user
 
-# Wait until the Docker daemon is actually responding
-for i in $(seq 1 30); do
-  docker info &>/dev/null && break
-  sleep 2
-done
+# Wait until Docker daemon is ready
+timeout 60 bash -c 'until docker info &>/dev/null; do sleep 2; done'
 
-# ── Docker Compose v2 plugin ─────────────────────────────────────────────────
-COMPOSE_VERSION=$(curl -fsSL https://api.github.com/repos/docker/compose/releases/latest | grep '"tag_name"' | head -1 | cut -d '"' -f 4)
+# ── Docker Compose v2 ────────────────────────────────────────────────────────
+COMPOSE_VERSION=$(curl -fsSL https://api.github.com/repos/docker/compose/releases/latest \
+  | grep '"tag_name"' | head -1 | cut -d'"' -f4)
 mkdir -p /usr/local/lib/docker/cli-plugins
 curl -fsSL "https://github.com/docker/compose/releases/download/${COMPOSE_VERSION}/docker-compose-linux-x86_64" \
   -o /usr/local/lib/docker/cli-plugins/docker-compose
 chmod +x /usr/local/lib/docker/cli-plugins/docker-compose
-
 docker compose version
 
-# ── Clone master repo and configure ──────────────────────────────────────────
+# ── Clone master repo ────────────────────────────────────────────────────────
 cd /home/ec2-user
 git clone https://github.com/sstprk/mnemo_master.git belleq
+chown -R ec2-user:ec2-user belleq
 cd belleq
 
 cat > .env << 'ENVEOF'
