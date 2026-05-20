@@ -35,7 +35,7 @@ done
 # ── Docker Compose v2 plugin ─────────────────────────────────────────────────
 COMPOSE_VERSION=$(curl -fsSL https://api.github.com/repos/docker/compose/releases/latest | grep '"tag_name"' | head -1 | cut -d '"' -f 4)
 mkdir -p /usr/local/lib/docker/cli-plugins
-curl -fsSL "https://github.com/docker/compose/releases/download/${{COMPOSE_VERSION}}/docker-compose-linux-x86_64" \
+curl -fsSL "https://github.com/docker/compose/releases/download/${COMPOSE_VERSION}/docker-compose-linux-x86_64" \
   -o /usr/local/lib/docker/cli-plugins/docker-compose
 chmod +x /usr/local/lib/docker/cli-plugins/docker-compose
 
