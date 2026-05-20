@@ -22,11 +22,16 @@ systemctl enable docker
 systemctl start docker
 usermod -aG docker ec2-user
 
-# ── Docker Compose v2 plugin ─────────────────────────────────────────────────
+# ── Docker Compose v2 + Buildx plugins ───────────────────────────────────────
 mkdir -p /usr/local/lib/docker/cli-plugins
 curl -SL "https://github.com/docker/compose/releases/latest/download/docker-compose-linux-x86_64" \
   -o /usr/local/lib/docker/cli-plugins/docker-compose
 chmod +x /usr/local/lib/docker/cli-plugins/docker-compose
+
+BUILDX_VERSION=$(curl -s https://api.github.com/repos/docker/buildx/releases/latest | grep '"tag_name"' | cut -d'"' -f4)
+curl -SL "https://github.com/docker/buildx/releases/download/${BUILDX_VERSION}/buildx-${BUILDX_VERSION}.linux-amd64" \
+  -o /usr/local/lib/docker/cli-plugins/docker-buildx
+chmod +x /usr/local/lib/docker/cli-plugins/docker-buildx
 
 # Wait until Docker daemon is ready
 timeout 120 bash -c 'until docker info &>/dev/null; do sleep 2; done'
