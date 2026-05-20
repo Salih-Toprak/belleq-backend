@@ -10,34 +10,50 @@ from config import settings
 logger = logging.getLogger(__name__)
 
 BOOTSTRAP_SCRIPT = """#!/bin/bash
-set -e
-yum update -y
-yum install -y docker git curl
-systemctl start docker
-systemctl enable docker
+exec > /var/log/belleq-bootstrap.log 2>&1
+set -ex
 
-# Docker Compose v2
+# ── Install Docker (works on Amazon Linux 2 AND Amazon Linux 2023) ───────────
+if command -v dnf &>/dev/null; then
+  dnf update -y
+  dnf install -y docker git curl
+else
+  yum update -y
+  yum install -y docker git curl
+fi
+
+# Make sure the docker service is running before anything else
+systemctl enable docker
+systemctl start docker
+
+# Wait until the Docker daemon is actually responding
+for i in $(seq 1 30); do
+  docker info &>/dev/null && break
+  sleep 2
+done
+
+# ── Docker Compose v2 plugin ─────────────────────────────────────────────────
+COMPOSE_VERSION=$(curl -fsSL https://api.github.com/repos/docker/compose/releases/latest | grep '"tag_name"' | head -1 | cut -d '"' -f 4)
 mkdir -p /usr/local/lib/docker/cli-plugins
-curl -SL https://github.com/docker/compose/releases/latest/download/docker-compose-linux-x86_64 \
+curl -fsSL "https://github.com/docker/compose/releases/download/${{COMPOSE_VERSION}}/docker-compose-linux-x86_64" \
   -o /usr/local/lib/docker/cli-plugins/docker-compose
 chmod +x /usr/local/lib/docker/cli-plugins/docker-compose
 
-# Pull Belleq master repo
+docker compose version
+
+# ── Clone master repo and configure ──────────────────────────────────────────
 cd /home/ec2-user
 git clone https://github.com/sstprk/mnemo_master.git belleq
 cd belleq
 
-# Write .env
 cat > .env << 'ENVEOF'
 ADMIN_API_KEY={master_api_key}
 QDRANT_URL=http://belleq-qdrant:6333
 QDRANT_COLLECTION=belleq_knowledge
 ENVEOF
 
-# Create network
-docker network create belleq-net
-
-# Start stack
+# ── Start the stack ──────────────────────────────────────────────────────────
+docker network create belleq-net || true
 docker compose up -d
 
 echo "Bootstrap complete"
