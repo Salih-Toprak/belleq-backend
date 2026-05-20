@@ -16,9 +16,8 @@ set -ex
 # ── Base deps ────────────────────────────────────────────────────────────────
 dnf install -y git ec2-instance-connect
 
-# ── Docker (official install script — works on any Linux) ────────────────────
-curl -fsSL https://get.docker.com -o /tmp/get-docker.sh
-sh /tmp/get-docker.sh
+# ── Docker (AL2023 native packages) ─────────────────────────────────────────
+dnf install -y docker docker-compose-plugin
 systemctl enable docker
 systemctl start docker
 usermod -aG docker ec2-user
@@ -26,8 +25,6 @@ usermod -aG docker ec2-user
 # Wait until Docker daemon is ready
 timeout 120 bash -c 'until docker info &>/dev/null; do sleep 2; done'
 docker version
-
-# Docker Compose plugin is included by get.docker.com — verify it
 docker compose version
 
 # ── Clone master repo ────────────────────────────────────────────────────────
