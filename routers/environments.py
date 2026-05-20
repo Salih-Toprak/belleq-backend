@@ -103,7 +103,9 @@ async def get_environment_status(env_id: str, user: dict = Depends(get_current_u
     sb = get_supabase()
     result = sb.table("environments").select("user_id, status, public_ip, ready_at, error_message").eq("id", env_id).maybe_single().execute()
     _check_ownership(result.data, user["id"])
-    return result.data
+    data = result.data
+    data.pop("user_id", None)
+    return data
 
 
 @router.delete("/{env_id}", status_code=204)
