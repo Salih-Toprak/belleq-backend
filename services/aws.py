@@ -55,7 +55,6 @@ QDRANT_COLLECTION=belleq_knowledge
 ENVEOF
 
 # ── Start the stack ──────────────────────────────────────────────────────────
-docker network create belleq-net || true
 docker compose up -d
 
 echo "Bootstrap complete"
