@@ -16,10 +16,10 @@ set -ex
 # ── Install Docker (works on Amazon Linux 2 AND Amazon Linux 2023) ───────────
 if command -v dnf &>/dev/null; then
   dnf update -y
-  dnf install -y docker git curl
+  dnf install -y docker git curl ec2-instance-connect
 else
   yum update -y
-  yum install -y docker git curl
+  yum install -y docker git curl ec2-instance-connect
 fi
 
 # Make sure the docker service is running before anything else
