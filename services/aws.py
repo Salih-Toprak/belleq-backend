@@ -31,7 +31,6 @@ cd belleq
 cat > .env << 'ENVEOF'
 ADMIN_API_KEY={master_api_key}
 QDRANT_URL=http://belleq-qdrant:6333
-OLLAMA_URL=http://belleq-ollama:11434
 QDRANT_COLLECTION=belleq_knowledge
 ENVEOF
 
@@ -40,11 +39,6 @@ docker network create belleq-net
 
 # Start stack
 docker compose up -d
-
-# Wait for Ollama to be ready then pull models
-sleep 30
-docker exec belleq-ollama ollama pull nomic-embed-text
-docker exec belleq-ollama ollama pull qwen2.5:3b
 
 echo "Bootstrap complete"
 """

@@ -101,7 +101,7 @@ async def get_environment(env_id: str, user: dict = Depends(get_current_user)):
 @router.get("/{env_id}/status")
 async def get_environment_status(env_id: str, user: dict = Depends(get_current_user)):
     sb = get_supabase()
-    result = sb.table("environments").select("status, public_ip, ready_at, error_message").eq("id", env_id).maybe_single().execute()
+    result = sb.table("environments").select("user_id, status, public_ip, ready_at, error_message").eq("id", env_id).maybe_single().execute()
     _check_ownership(result.data, user["id"])
     return result.data
 
