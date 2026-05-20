@@ -13,25 +13,21 @@ BOOTSTRAP_SCRIPT = """#!/bin/bash
 exec > /var/log/belleq-bootstrap.log 2>&1
 set -ex
 
-# ── System update + install deps ─────────────────────────────────────────────
-dnf update -y
-dnf install -y docker git curl ec2-instance-connect
+# ── Base deps ────────────────────────────────────────────────────────────────
+dnf install -y git ec2-instance-connect
 
-# ── Docker ───────────────────────────────────────────────────────────────────
+# ── Docker (official install script — works on any Linux) ────────────────────
+curl -fsSL https://get.docker.com -o /tmp/get-docker.sh
+sh /tmp/get-docker.sh
 systemctl enable docker
 systemctl start docker
 usermod -aG docker ec2-user
 
 # Wait until Docker daemon is ready
-timeout 60 bash -c 'until docker info &>/dev/null; do sleep 2; done'
+timeout 120 bash -c 'until docker info &>/dev/null; do sleep 2; done'
+docker version
 
-# ── Docker Compose v2 ────────────────────────────────────────────────────────
-COMPOSE_VERSION=$(curl -fsSL https://api.github.com/repos/docker/compose/releases/latest \
-  | grep '"tag_name"' | head -1 | cut -d'"' -f4)
-mkdir -p /usr/local/lib/docker/cli-plugins
-curl -fsSL "https://github.com/docker/compose/releases/download/${COMPOSE_VERSION}/docker-compose-linux-x86_64" \
-  -o /usr/local/lib/docker/cli-plugins/docker-compose
-chmod +x /usr/local/lib/docker/cli-plugins/docker-compose
+# Docker Compose plugin is included by get.docker.com — verify it
 docker compose version
 
 # ── Clone master repo ────────────────────────────────────────────────────────
