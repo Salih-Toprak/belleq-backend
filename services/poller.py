@@ -45,7 +45,7 @@ async def poll_until_ready(environment_id: str):
         except (httpx.ConnectError, httpx.ReadTimeout, httpx.ConnectTimeout, OSError):
             pass
 
-        logger.debug("Poller: environment %s not ready yet (%ds elapsed)", environment_id, elapsed)
+        logger.info("Poller: environment %s not ready yet (%ds elapsed)", environment_id, elapsed)
         await asyncio.sleep(interval)
         elapsed += interval
 
