@@ -17,10 +17,16 @@ set -ex
 dnf install -y git ec2-instance-connect
 
 # ── Docker (AL2023 native packages) ─────────────────────────────────────────
-dnf install -y docker docker-compose-plugin
+dnf install -y docker
 systemctl enable docker
 systemctl start docker
 usermod -aG docker ec2-user
+
+# ── Docker Compose v2 plugin ─────────────────────────────────────────────────
+mkdir -p /usr/local/lib/docker/cli-plugins
+curl -SL "https://github.com/docker/compose/releases/latest/download/docker-compose-linux-x86_64" \
+  -o /usr/local/lib/docker/cli-plugins/docker-compose
+chmod +x /usr/local/lib/docker/cli-plugins/docker-compose
 
 # Wait until Docker daemon is ready
 timeout 120 bash -c 'until docker info &>/dev/null; do sleep 2; done'
