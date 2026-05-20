@@ -35,7 +35,11 @@ docker compose version
 
 # ── Clone master repo ────────────────────────────────────────────────────────
 cd /home/ec2-user
-git clone https://github.com/sstprk/mnemo_master.git belleq
+REPO_URL="https://github.com/{master_repo}"
+if [ -n "{github_token}" ]; then
+  REPO_URL="https://x-access-token:{github_token}@github.com/{master_repo}"
+fi
+git clone "$REPO_URL" belleq
 chown -R ec2-user:ec2-user belleq
 cd belleq
 
@@ -65,6 +69,8 @@ def _get_ec2_client(region: str):
 def _launch_instance(instance_name: str, master_api_key: str, region: str) -> str:
     ec2 = _get_ec2_client(region)
     user_data = BOOTSTRAP_SCRIPT.replace("{master_api_key}", master_api_key)
+    user_data = user_data.replace("{master_repo}", settings.BELLEQ_MASTER_IMAGE)
+    user_data = user_data.replace("{github_token}", settings.GITHUB_TOKEN)
 
     params = {
         "ImageId": settings.AWS_AMI_ID,

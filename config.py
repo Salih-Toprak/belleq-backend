@@ -13,8 +13,9 @@ class Settings(BaseSettings):
     AWS_KEY_PAIR_NAME: str = ""
     AWS_SECURITY_GROUP_ID: str = ""
 
-    BELLEQ_MASTER_IMAGE: str = "sstprk/mnemo_master:latest"
-    BELLEQ_CONTAINER_IMAGE: str = "sstprk/mnemo_container:latest"
+    GITHUB_TOKEN: str = ""
+    BELLEQ_MASTER_IMAGE: str = "Salih-Toprak/belleq-master.git"
+    BELLEQ_CONTAINER_IMAGE: str = "Salih-Toprak/belleq-user.git"
     INTERNAL_POLL_INTERVAL: int = 15
     INTERNAL_POLL_TIMEOUT: int = 600
     CORS_ORIGINS: str = "http://localhost:3000,https://belleq.com,https://app.belleq.com"
