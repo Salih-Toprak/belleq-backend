@@ -9,6 +9,7 @@ from pydantic import BaseModel
 
 from auth import get_current_user
 from database import get_supabase
+from rbac import get_current_profile, require_plan, check_environment_limit
 from services import aws
 from services.poller import poll_until_ready
 
@@ -42,7 +43,12 @@ async def list_environments(user: dict = Depends(get_current_user)):
 
 
 @router.post("/provision", status_code=201)
-async def provision_environment(body: ProvisionRequest, user: dict = Depends(get_current_user)):
+async def provision_environment(
+    body: ProvisionRequest,
+    user: dict = Depends(get_current_user),
+    profile: dict = Depends(require_plan),
+):
+    check_environment_limit(profile)
     sb = get_supabase()
     env_id = str(uuid.uuid4())
     master_api_key = secrets.token_hex(32)

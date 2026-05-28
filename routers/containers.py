@@ -7,6 +7,7 @@ from pydantic import BaseModel
 
 from auth import get_current_user
 from database import get_supabase
+from rbac import require_plan, check_container_limit
 from services import docker_manager
 
 logger = logging.getLogger(__name__)
@@ -32,10 +33,12 @@ async def provision_container(
     env_id: str,
     body: ProvisionContainerRequest,
     user: dict = Depends(get_current_user),
+    profile: dict = Depends(require_plan),
 ):
     env = _get_owned_env(env_id, user["id"])
     if env["status"] != "ready":
         raise HTTPException(status_code=400, detail="Environment is not ready")
+    check_container_limit(profile, env_id)
 
     sb = get_supabase()
     api_key = secrets.token_hex(32)
