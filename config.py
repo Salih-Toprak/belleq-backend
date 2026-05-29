@@ -18,7 +18,7 @@ class Settings(BaseSettings):
     BELLEQ_CONTAINER_IMAGE: str = "Salih-Toprak/belleq-user.git"
     INTERNAL_POLL_INTERVAL: int = 15
     INTERNAL_POLL_TIMEOUT: int = 600
-    CORS_ORIGINS: str = "http://localhost:3000,https://belleq.com,https://app.belleq.com"
+    CORS_ORIGINS: str = "http://localhost:3000,https://belleq.app,https://www.belleq.app"
 
     @property
     def cors_origins_list(self) -> list[str]:
