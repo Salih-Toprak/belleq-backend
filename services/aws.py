@@ -54,8 +54,20 @@ QDRANT_URL=http://belleq-qdrant:6333
 QDRANT_COLLECTION=belleq_knowledge
 ENVEOF
 
+# ── Authenticate to GHCR ──────────────────────────────────────────────────────
+# Needed only if the master/user packages are private. Harmless if public.
+# The token must carry read:packages scope to pull private images.
+if [ -n "{github_token}" ]; then
+  echo "{github_token}" | docker login ghcr.io -u x-access-token --password-stdin || true
+fi
+
 # ── Start the stack ──────────────────────────────────────────────────────────
-docker compose up -d
+# Pull the prebuilt master image from GHCR instead of building from source on
+# every boot (faster, and avoids re-resolving Python deps per environment).
+# The repo is still cloned for the compose file + config; --no-build skips the
+# local image build now that an image: is set in docker-compose.yml.
+docker compose pull
+docker compose up -d --no-build
 
 echo "Bootstrap complete"
 """

@@ -1,0 +1,13 @@
+# Public HTTPS for the MCP bridge. Caddy auto-fetches a Let's Encrypt cert for
+# mcp.belleq.app, then reverse-proxies to the platform API container.
+#
+# Requirements:
+#   - DNS: A record  mcp.belleq.app  ->  this host's public IP (the STATIC backend)
+#   - Security group: inbound 80 and 443 open
+#
+# Streaming-friendly so MCP's long-lived responses pass through unbuffered.
+mcp.belleq.app {
+	reverse_proxy api:8080 {
+		flush_interval -1
+	}
+}
