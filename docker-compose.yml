@@ -2,8 +2,38 @@ services:
   api:
     build: .
     container_name: belleq-platform-api
+    # 8080 stays published for the dashboard's server-side /api/platform proxy.
     ports:
       - "8080:8080"
     env_file:
       - .env
     restart: always
+    networks:
+      - belleq-platform
+
+  # TLS termination for the public MCP endpoint (mcp.belleq.app).
+  # Caddy auto-provisions a Let's Encrypt cert; requires ports 80 + 443 open
+  # on this host's security group and a DNS A record mcp.belleq.app -> this IP.
+  caddy:
+    image: caddy:2-alpine
+    container_name: belleq-platform-caddy
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+    depends_on:
+      - api
+    restart: always
+    networks:
+      - belleq-platform
+
+networks:
+  belleq-platform:
+    name: belleq-platform
+
+volumes:
+  caddy_data:
+  caddy_config:
