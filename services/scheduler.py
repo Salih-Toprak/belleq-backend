@@ -172,10 +172,30 @@ async def provision_host(
 
 # ── Placement ────────────────────────────────────────────────────────
 
+def _workspace_home_host_id(workspace_id: str) -> str | None:
+    """The host where this workspace already has contexts (affinity), if any."""
+    sb = get_supabase()
+    rows = (
+        sb.table("containers")
+        .select("host_id")
+        .eq("workspace_id", workspace_id)
+        .neq("status", "stopped")
+        .not_.is_("host_id", "null")
+        .limit(1)
+        .execute()
+    ).data or []
+    return rows[0]["host_id"] if rows else None
+
+
 def find_ready_host_with_capacity(
     *, plan: pc.PlanConfig, region: str, workspace_id: str, caps: pc.ResourceCaps
 ) -> dict | None:
-    """Reserve a slot on an existing READY host, returning it, or None."""
+    """Reserve a slot on an existing READY host, returning it, or None.
+
+    Workspace affinity: a workspace's contexts prefer the host where it already
+    has contexts, so its (workspace-level) connectors stay co-located on one
+    master.
+    """
     sb = get_supabase()
     q = sb.table("hosts").select("*").eq("region", region).eq("status", "ready")
     if plan.hosting == "shared":
@@ -183,6 +203,12 @@ def find_ready_host_with_capacity(
     else:
         q = q.eq("host_type", "dedicated").eq("workspace_id", workspace_id)
     rows = q.order("created_at").execute().data or []
+
+    # Try the workspace's existing home host first.
+    home_id = _workspace_home_host_id(workspace_id)
+    if home_id:
+        rows.sort(key=lambda h: 0 if h["id"] == home_id else 1)
+
     for h in rows:
         if reserve_capacity(h["id"], caps):
             return h
