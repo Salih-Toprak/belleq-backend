@@ -187,3 +187,29 @@ def find_ready_host_with_capacity(
         if reserve_capacity(h["id"], caps):
             return h
     return None
+
+
+async def place_or_provision(
+    *, plan: pc.PlanConfig, region: str, workspace_id: str, caps: pc.ResourceCaps
+) -> dict:
+    """Return a ready host with a reserved slot for one context.
+
+    Fast path: reuse an existing host. Slow path: provision a new EC2 host
+    (may take minutes) — call this from a background task.
+    """
+    host = find_ready_host_with_capacity(
+        plan=plan, region=region, workspace_id=workspace_id, caps=caps
+    )
+    if host is not None:
+        return host
+
+    host = await provision_host(
+        host_type=plan.hosting,  # "shared" | "dedicated"
+        plan=plan,
+        region=region,
+        pool=next_pool_name(region) if plan.hosting == "shared" else None,
+        workspace_id=workspace_id if plan.hosting == "dedicated" else None,
+    )
+    if not reserve_capacity(host["id"], caps):
+        raise RuntimeError(f"freshly provisioned host {host['id']} had no capacity")
+    return host

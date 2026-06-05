@@ -67,3 +67,8 @@ create index if not exists containers_ws_idx   on public.containers (workspace_i
 create index if not exists containers_host_idx on public.containers (host_id);
 
 -- environment_id is now legacy (kept for back-compat; the new flow uses host_id).
+-- The collapsed flow has no environment, so this column must allow NULL.
+alter table public.containers alter column environment_id drop not null;
+
+-- Optional: error_message on contexts for the dashboard to surface failures.
+alter table public.containers add column if not exists error_message text;
