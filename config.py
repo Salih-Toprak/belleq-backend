@@ -16,6 +16,12 @@ class Settings(BaseSettings):
     GITHUB_TOKEN: str = ""
     BELLEQ_MASTER_IMAGE: str = "Salih-Toprak/belleq-master.git"
     BELLEQ_CONTAINER_IMAGE: str = "Salih-Toprak/belleq-user.git"
+
+    # Central embedding service (one shared Ollama for every host). Masters and
+    # their context containers point here instead of running their own.
+    EMBEDDING_OLLAMA_URL: str = ""  # e.g. http://10.0.1.20:11434
+    EMBEDDING_MODEL: str = "nomic-embed-text"
+
     INTERNAL_POLL_INTERVAL: int = 15
     INTERNAL_POLL_TIMEOUT: int = 600
     CORS_ORIGINS: str = "http://localhost:3000,https://belleq.app,https://www.belleq.app"
