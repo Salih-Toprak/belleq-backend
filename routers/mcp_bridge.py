@@ -59,44 +59,45 @@ def _resolve_env(env_id: str) -> dict | None:
     return res.data if res else None
 
 
+def _resolve_context(context_id: str) -> str | None:
+    """Resolve a context to its master's `/mcp/{container_name}` target URL.
+
+    The context lives on a (dynamic) host; we look up its host's master endpoint
+    and the container name the aggregator serves.
+    """
+    sb = get_supabase()
+    ctx = (
+        sb.table("containers")
+        .select("container_name, host_id")
+        .eq("id", context_id)
+        .maybe_single()
+        .execute()
+    ).data
+    if not ctx or not ctx.get("host_id"):
+        return None
+    host = (
+        sb.table("hosts")
+        .select("master_endpoint, public_ip")
+        .eq("id", ctx["host_id"])
+        .maybe_single()
+        .execute()
+    ).data
+    if not host:
+        return None
+    endpoint = host.get("master_endpoint") or (f"http://{host.get('public_ip')}:9000")
+    return f"{endpoint}/mcp/{ctx['container_name']}"
+
+
 async def _close(upstream: httpx.Response, client: httpx.AsyncClient) -> None:
     await upstream.aclose()
     await client.aclose()
 
 
-@router.api_route(
-    "/mcp/{env_id}/{container_id}",
-    methods=["GET", "POST", "DELETE", "OPTIONS"],
-)
-@router.api_route(
-    "/mcp/{env_id}/{container_id}/{rest:path}",
-    methods=["GET", "POST", "DELETE", "OPTIONS"],
-)
-async def mcp_bridge(
-    env_id: str,
-    container_id: str,
-    request: Request,
-    rest: str = "",
-):
-    if request.method == "OPTIONS":
-        return Response(status_code=204, headers=_CORS)
-
-    env = _resolve_env(env_id)
-    if not env or not env.get("public_ip"):
-        return Response(
-            content="Environment is not available",
-            status_code=502,
-            headers=_CORS,
-        )
-
-    port = env.get("master_port") or 9000
-    target = f"http://{env['public_ip']}:{port}/mcp/{container_id}"
+async def _stream_proxy(request: Request, target: str, rest: str, log_id: str) -> Response:
+    """Stream a request through to an upstream MCP target."""
     if rest:
-        target += f"/{rest}"
-
-    fwd_headers = {
-        k: v for k, v in request.headers.items() if k.lower() not in HOP_BY_HOP
-    }
+        target = f"{target}/{rest}"
+    fwd_headers = {k: v for k, v in request.headers.items() if k.lower() not in HOP_BY_HOP}
     body = await request.body()
 
     # No read timeout: MCP responses can be long-lived streams.
@@ -112,21 +113,45 @@ async def mcp_bridge(
         upstream = await client.send(upstream_req, stream=True)
     except (httpx.ConnectError, httpx.ConnectTimeout, httpx.ReadTimeout):
         await client.aclose()
-        logger.error("master_unreachable env=%s ip=%s", env_id, env.get("public_ip"))
+        logger.error("master_unreachable id=%s", log_id)
         return Response(content="Master is unreachable", status_code=502, headers=_CORS)
     except httpx.HTTPError as exc:
         await client.aclose()
-        logger.exception("mcp_bridge_failed env=%s", env_id)
+        logger.exception("mcp_bridge_failed id=%s", log_id)
         return Response(content=f"Bridge error: {exc}", status_code=502, headers=_CORS)
 
-    resp_headers = {
-        k: v for k, v in upstream.headers.items() if k.lower() not in HOP_BY_HOP
-    }
+    resp_headers = {k: v for k, v in upstream.headers.items() if k.lower() not in HOP_BY_HOP}
     resp_headers.update(_CORS)
-
     return StreamingResponse(
         upstream.aiter_raw(),
         status_code=upstream.status_code,
         headers=resp_headers,
         background=BackgroundTask(_close, upstream, client),
     )
+
+
+# ── New: per-context endpoint (collapsed model) ──────────────────────────────
+#   https://mcp.belleq.app/c/{context_id}  ->  the context's host master
+@router.api_route("/c/{context_id}", methods=["GET", "POST", "DELETE", "OPTIONS"])
+@router.api_route("/c/{context_id}/{rest:path}", methods=["GET", "POST", "DELETE", "OPTIONS"])
+async def mcp_bridge_context(context_id: str, request: Request, rest: str = ""):
+    if request.method == "OPTIONS":
+        return Response(status_code=204, headers=_CORS)
+    target = _resolve_context(context_id)
+    if not target:
+        return Response(content="Context is not available", status_code=502, headers=_CORS)
+    return await _stream_proxy(request, target, rest, log_id=f"ctx:{context_id}")
+
+
+# ── Legacy: per-environment endpoint (kept for existing connectors) ──────────
+@router.api_route("/mcp/{env_id}/{container_id}", methods=["GET", "POST", "DELETE", "OPTIONS"])
+@router.api_route("/mcp/{env_id}/{container_id}/{rest:path}", methods=["GET", "POST", "DELETE", "OPTIONS"])
+async def mcp_bridge(env_id: str, container_id: str, request: Request, rest: str = ""):
+    if request.method == "OPTIONS":
+        return Response(status_code=204, headers=_CORS)
+    env = _resolve_env(env_id)
+    if not env or not env.get("public_ip"):
+        return Response(content="Environment is not available", status_code=502, headers=_CORS)
+    port = env.get("master_port") or 9000
+    target = f"http://{env['public_ip']}:{port}/mcp/{container_id}"
+    return await _stream_proxy(request, target, rest, log_id=f"env:{env_id}")

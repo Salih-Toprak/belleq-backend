@@ -82,23 +82,29 @@ def _get_ec2_client(region: str):
     )
 
 
-def _launch_instance(instance_name: str, master_api_key: str, region: str) -> str:
+def _launch_instance(
+    instance_name: str,
+    master_api_key: str,
+    region: str,
+    instance_type: str | None = None,
+    tags: list[dict] | None = None,
+) -> str:
     ec2 = _get_ec2_client(region)
     user_data = BOOTSTRAP_SCRIPT.replace("{master_api_key}", master_api_key)
     user_data = user_data.replace("{master_repo}", settings.BELLEQ_MASTER_IMAGE)
     user_data = user_data.replace("{github_token}", settings.GITHUB_TOKEN)
 
+    itype = instance_type or settings.AWS_INSTANCE_TYPE
+    instance_tags = tags or [{"Key": "Name", "Value": instance_name}]
+
     params = {
         "ImageId": settings.AWS_AMI_ID,
-        "InstanceType": settings.AWS_INSTANCE_TYPE,
+        "InstanceType": itype,
         "MinCount": 1,
         "MaxCount": 1,
         "UserData": base64.b64encode(user_data.encode()).decode(),
         "TagSpecifications": [
-            {
-                "ResourceType": "instance",
-                "Tags": [{"Key": "Name", "Value": instance_name}],
-            }
+            {"ResourceType": "instance", "Tags": instance_tags},
         ],
     }
 
@@ -108,7 +114,7 @@ def _launch_instance(instance_name: str, master_api_key: str, region: str) -> st
     if settings.AWS_KEY_PAIR_NAME:
         params["KeyName"] = settings.AWS_KEY_PAIR_NAME
 
-    logger.info("Launching EC2 instance: name=%s region=%s type=%s", instance_name, region, settings.AWS_INSTANCE_TYPE)
+    logger.info("Launching EC2 instance: name=%s region=%s type=%s", instance_name, region, itype)
     response = ec2.run_instances(**params)
     instance_id = response["Instances"][0]["InstanceId"]
     logger.info("EC2 instance launched: %s", instance_id)
@@ -135,8 +141,16 @@ def _terminate_instance(instance_id: str, region: str):
     ec2.terminate_instances(InstanceIds=[instance_id])
 
 
-async def provision_ec2(instance_name: str, master_api_key: str, region: str) -> dict:
-    instance_id = await asyncio.to_thread(_launch_instance, instance_name, master_api_key, region)
+async def provision_ec2(
+    instance_name: str,
+    master_api_key: str,
+    region: str,
+    instance_type: str | None = None,
+    tags: list[dict] | None = None,
+) -> dict:
+    instance_id = await asyncio.to_thread(
+        _launch_instance, instance_name, master_api_key, region, instance_type, tags
+    )
     public_ip = await asyncio.to_thread(_wait_for_public_ip, instance_id, region)
     return {"instance_id": instance_id, "public_ip": public_ip}
 
