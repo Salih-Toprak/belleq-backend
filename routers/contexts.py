@@ -91,6 +91,9 @@ async def provision_context(
     container_name = naming.context_container_name(workspace_id, body.name, context_id)
     collection = naming.qdrant_collection(context_id)
     caps = plan.context_caps
+    # Generate the context's API key up front so the row is always complete —
+    # the same key is handed to the master when the container provisions.
+    api_key = secrets.token_hex(32)
 
     row = {
         "id": context_id,
@@ -99,6 +102,7 @@ async def provision_context(
         "name": body.name.strip(),
         "container_name": container_name,
         "qdrant_collection": collection,
+        "api_key": api_key,
         "plan": plan.key,
         "ram_cap_mb": caps.ram_mb,
         "cpu_cap_vcpu": caps.cpu_vcpu,
@@ -112,17 +116,19 @@ async def provision_context(
     ).execute()
 
     asyncio.create_task(
-        _provision_bg(context_id, workspace_id, profile.get("role"), body.name, container_name, collection, body.region)
+        _provision_bg(
+            context_id, workspace_id, profile.get("role"), body.name,
+            container_name, collection, body.region, api_key,
+        )
     )
     logger.info("context_provision_started id=%s ws=%s", context_id, workspace_id)
     return _public(row)
 
 
-async def _provision_bg(context_id, workspace_id, role, name, container_name, collection, region):
+async def _provision_bg(context_id, workspace_id, role, name, container_name, collection, region, api_key):
     sb = get_supabase()
     plan = plan_for_role(role)
     caps = plan.context_caps
-    api_key = secrets.token_hex(32)
     host: dict | None = None
     try:
         host = await scheduler.place_or_provision(
