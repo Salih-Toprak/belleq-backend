@@ -52,6 +52,9 @@ cat > .env << 'ENVEOF'
 ADMIN_API_KEY={master_api_key}
 QDRANT_URL=http://belleq-qdrant:6333
 QDRANT_COLLECTION=belleq_knowledge
+EMBEDDING_BACKEND=ollama
+OLLAMA_BASE_URL={embedding_url}
+OLLAMA_EMBED_MODEL={embedding_model}
 ENVEOF
 
 # ── Authenticate to GHCR ──────────────────────────────────────────────────────
@@ -93,6 +96,8 @@ def _launch_instance(
     user_data = BOOTSTRAP_SCRIPT.replace("{master_api_key}", master_api_key)
     user_data = user_data.replace("{master_repo}", settings.BELLEQ_MASTER_IMAGE)
     user_data = user_data.replace("{github_token}", settings.GITHUB_TOKEN)
+    user_data = user_data.replace("{embedding_url}", settings.EMBEDDING_OLLAMA_URL)
+    user_data = user_data.replace("{embedding_model}", settings.EMBEDDING_MODEL)
 
     itype = instance_type or settings.AWS_INSTANCE_TYPE
     instance_tags = tags or [{"Key": "Name", "Value": instance_name}]

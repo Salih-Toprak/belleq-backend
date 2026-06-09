@@ -1,0 +1,35 @@
+# Central embedding service — one shared Ollama for all belleq hosts.
+# Deploy once on a dedicated instance (t3.large recommended), then set
+# EMBEDDING_OLLAMA_URL=http://<this-host-private-ip>:11434 in the platform
+# backend's .env so every provisioned master/context uses it.
+#
+#   docker compose up -d
+#
+# Security: restrict inbound 11434 to the belleq hosts' security group only.
+services:
+  ollama:
+    image: ollama/ollama:latest
+    container_name: belleq-ollama
+    ports:
+      - "11434:11434"
+    volumes:
+      - ollama_models:/root/.ollama
+    restart: always
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # One-shot: pull the embedding model on first boot.
+  model-pull:
+    image: ollama/ollama:latest
+    depends_on:
+      - ollama
+    environment:
+      - OLLAMA_HOST=ollama:11434
+    entrypoint: ["/bin/sh", "-c", "sleep 6 && ollama pull nomic-embed-text"]
+    restart: "no"
+
+volumes:
+  ollama_models:

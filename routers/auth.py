@@ -16,7 +16,12 @@ class SelectPlanRequest(BaseModel):
 async def me(profile: dict = Depends(get_current_profile)):
     """Return the current user's profile, including role/plan info."""
     role = profile.get("role")
-    limits = PLAN_LIMITS.get(role) if role else None
+    limits = dict(PLAN_LIMITS.get(role) or {}) if role else None
+    if limits is not None:
+        from plan_config import is_unlimited, plan_for_role
+
+        plan = plan_for_role(role)
+        limits["max_contexts"] = None if is_unlimited(plan.max_contexts) else plan.max_contexts
     return {
         **profile,
         "limits": limits,

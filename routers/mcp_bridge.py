@@ -143,6 +143,46 @@ async def mcp_bridge_context(context_id: str, request: Request, rest: str = ""):
     return await _stream_proxy(request, target, rest, log_id=f"ctx:{context_id}")
 
 
+def _resolve_workspace(workspace_id: str) -> str | None:
+    """Workspace 'connect everything' endpoint -> the workspace's home master."""
+    sb = get_supabase()
+    ctxs = (
+        sb.table("containers")
+        .select("host_id")
+        .eq("workspace_id", workspace_id)
+        .neq("status", "stopped")
+        .not_.is_("host_id", "null")
+        .limit(1)
+        .execute()
+    ).data or []
+    if not ctxs:
+        return None
+    host = (
+        sb.table("hosts")
+        .select("master_endpoint, public_ip")
+        .eq("id", ctxs[0]["host_id"])
+        .maybe_single()
+        .execute()
+    ).data
+    if not host:
+        return None
+    endpoint = host.get("master_endpoint") or (f"http://{host.get('public_ip')}:9000")
+    return f"{endpoint}/mcp/w_{workspace_id}"
+
+
+# ── New: workspace 'connect everything' endpoint ─────────────────────────────
+#   https://mcp.belleq.app/w/{workspace_id}  ->  workspace-scoped aggregation
+@router.api_route("/w/{workspace_id}", methods=["GET", "POST", "DELETE", "OPTIONS"])
+@router.api_route("/w/{workspace_id}/{rest:path}", methods=["GET", "POST", "DELETE", "OPTIONS"])
+async def mcp_bridge_workspace(workspace_id: str, request: Request, rest: str = ""):
+    if request.method == "OPTIONS":
+        return Response(status_code=204, headers=_CORS)
+    target = _resolve_workspace(workspace_id)
+    if not target:
+        return Response(content="Workspace has no contexts yet", status_code=502, headers=_CORS)
+    return await _stream_proxy(request, target, rest, log_id=f"ws:{workspace_id}")
+
+
 # ── Legacy: per-environment endpoint (kept for existing connectors) ──────────
 @router.api_route("/mcp/{env_id}/{container_id}", methods=["GET", "POST", "DELETE", "OPTIONS"])
 @router.api_route("/mcp/{env_id}/{container_id}/{rest:path}", methods=["GET", "POST", "DELETE", "OPTIONS"])
