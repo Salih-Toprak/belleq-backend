@@ -12,7 +12,11 @@ so the numbers live in exactly one place. Confirmed plan numbers (2026-06):
 
 from __future__ import annotations
 
+import logging
+import time
 from dataclasses import asdict, dataclass
+
+logger = logging.getLogger(__name__)
 
 UNLIMITED = -1  # sentinel for "no limit" on counts/storage/queries
 
@@ -51,7 +55,9 @@ class PlanConfig:
         return d
 
 
-PLANS: dict[str, PlanConfig] = {
+# Built-in defaults: the seed for the `plans` table AND the fallback used when
+# the DB is unreachable or the table is empty, so the service never breaks.
+_DEFAULT_PLANS: dict[str, PlanConfig] = {
     "starter": PlanConfig(
         key="starter",
         max_contexts=3,
@@ -106,10 +112,63 @@ ROLE_TO_PLAN: dict[str, str] = {
 }
 
 
+# ── DB-backed plan definitions (table: public.plans) ─────────────────
+# The `plans` table is the source of truth; _DEFAULT_PLANS is the seed/fallback.
+# Edit a plan's caps or instance_type in the DB and it takes effect within the
+# cache TTL — no redeploy. Falls back per-key if the table is missing a row.
+
+_plans_cache: dict[str, PlanConfig] | None = None
+_plans_cache_at: float = 0.0
+_PLANS_TTL_SECONDS = 60
+
+
+def _row_to_plan(r: dict) -> PlanConfig:
+    return PlanConfig(
+        key=r["key"],
+        max_contexts=int(r["max_contexts"]),
+        kb_storage_gb=int(r["kb_storage_gb"]),
+        queries_per_day=int(r["queries_per_day"]),
+        memory_days=int(r["memory_days"]),
+        context_caps=ResourceCaps(
+            ram_mb=int(r["ram_cap_mb"]),
+            cpu_vcpu=float(r["cpu_cap_vcpu"]),
+            disk_gb=int(r["disk_cap_gb"]),
+        ),
+        hosting=r["hosting"],
+        instance_type=r["instance_type"],
+    )
+
+
+def _load_plans_from_db() -> dict[str, PlanConfig] | None:
+    try:
+        from database import get_supabase
+
+        rows = get_supabase().table("plans").select("*").execute().data or []
+        return {r["key"]: _row_to_plan(r) for r in rows} or None
+    except Exception:
+        logger.warning("plans table unavailable; using built-in defaults", exc_info=True)
+        return None
+
+
+def get_plans(force: bool = False) -> dict[str, PlanConfig]:
+    """Plan definitions, DB-first with a short cache and per-key fallback."""
+    global _plans_cache, _plans_cache_at
+    now = time.time()
+    if not force and _plans_cache is not None and now - _plans_cache_at < _PLANS_TTL_SECONDS:
+        return _plans_cache
+    merged = dict(_DEFAULT_PLANS)
+    loaded = _load_plans_from_db()
+    if loaded:
+        merged.update(loaded)
+    _plans_cache, _plans_cache_at = merged, now
+    return merged
+
+
 def plan_for_role(role: str | None) -> PlanConfig:
     """Resolve a Supabase role to its PlanConfig. Defaults to Starter."""
     key = ROLE_TO_PLAN.get((role or "").lower(), "starter")
-    return PLANS[key]
+    plans = get_plans()
+    return plans.get(key) or _DEFAULT_PLANS[key]
 
 
 # ── Host capacity ────────────────────────────────────────────────────
