@@ -9,7 +9,10 @@ class Settings(BaseSettings):
     AWS_SECRET_ACCESS_KEY: str = ""
     AWS_REGION: str = "eu-west-1"
     AWS_AMI_ID: str = "ami-0c02fb55956c7d316"
-    AWS_INSTANCE_TYPE: str = "t3.medium"
+    # Overrides the per-plan EC2 type for every host the scheduler launches —
+    # e.g. set to "m7i-flex.large" to stay inside the new-account free tier.
+    # Empty = use each plan's instance type from plan_config.py.
+    AWS_INSTANCE_TYPE: str = ""
     AWS_KEY_PAIR_NAME: str = ""
     AWS_SECURITY_GROUP_ID: str = ""
 

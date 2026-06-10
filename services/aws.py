@@ -99,7 +99,7 @@ def _launch_instance(
     user_data = user_data.replace("{embedding_url}", settings.EMBEDDING_OLLAMA_URL)
     user_data = user_data.replace("{embedding_model}", settings.EMBEDDING_MODEL)
 
-    itype = instance_type or settings.AWS_INSTANCE_TYPE
+    itype = instance_type or settings.AWS_INSTANCE_TYPE or "t3.large"
     instance_tags = tags or [{"Key": "Name", "Value": instance_name}]
 
     params = {
