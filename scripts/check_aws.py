@@ -57,7 +57,14 @@ def main() -> int:
         try:
             imgs = ec2.describe_images(ImageIds=[settings.AWS_AMI_ID])["Images"]
             if imgs:
-                print(f"{OK} AMI {settings.AWS_AMI_ID} found — {imgs[0].get('Name','')}")
+                arch = imgs[0].get("Architecture", "?")
+                print(f"{OK} AMI {settings.AWS_AMI_ID} found — {imgs[0].get('Name','')} [{arch}]")
+                # Belleq's instance types (t3.*) are x86_64. An arm64 (Graviton)
+                # AMI fails RunInstances with an architecture-mismatch error.
+                if arch != "x86_64":
+                    print(f"{BAD} AMI architecture is '{arch}', but the instance type "
+                          f"{settings.AWS_INSTANCE_TYPE} is x86_64 — pick the 64-bit (x86) AMI.")
+                    problems += 1
             else:
                 print(f"{BAD} AMI {settings.AWS_AMI_ID} not found in {settings.AWS_REGION}")
                 problems += 1

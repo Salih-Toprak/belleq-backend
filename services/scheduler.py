@@ -111,6 +111,15 @@ async def provision_host(
     Raises on failure (the hosts row is marked error).
     """
     sb = get_supabase()
+    # AWS_INSTANCE_TYPE (if set) overrides the per-plan EC2 type for every host —
+    # e.g. m7i-flex.large to stay in the new-account free tier. Capacity budget
+    # still follows the plan's type (fine when the override has >= its resources).
+    instance_type = settings.AWS_INSTANCE_TYPE or plan.instance_type
+    if settings.AWS_INSTANCE_TYPE:
+        logger.info(
+            "AWS_INSTANCE_TYPE override active — launching %s (plan type %s)",
+            instance_type, plan.instance_type,
+        )
     budget = pc.schedulable_budget(plan.instance_type)
     host_id = str(uuid.uuid4())
     master_api_key = secrets.token_hex(32)
@@ -123,7 +132,7 @@ async def provision_host(
             "workspace_id": workspace_id,
             "plan": plan.key,
             "region": region,
-            "instance_type": plan.instance_type,
+            "instance_type": instance_type,
             "master_api_key": master_api_key,
             "cpu_budget": budget.cpu_vcpu,
             "ram_budget_mb": budget.ram_mb,
@@ -140,7 +149,7 @@ async def provision_host(
             instance_name=name,
             master_api_key=master_api_key,
             region=region,
-            instance_type=plan.instance_type,
+            instance_type=instance_type,
             tags=tags,
         )
     except Exception as exc:  # noqa: BLE001
