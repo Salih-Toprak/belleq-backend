@@ -20,6 +20,7 @@ from pydantic import BaseModel
 
 import naming
 from auth import get_current_user
+from config import settings
 from database import get_supabase
 from plan_config import ResourceCaps, is_unlimited, plan_for_role
 from rbac import require_plan
@@ -153,6 +154,9 @@ async def _provision_bg(context_id, workspace_id, role, name, container_name, co
             "labels": labels,
             "qdrant_collection": collection,
             "container_type": "user",
+            # Extraction creds live on the (static) backend and are pushed down
+            # per-context so masters/containers never store them.
+            "extraction": settings.extraction_payload,
         }
         result = await _master_provision(host, payload)
         sb.table("containers").update(
