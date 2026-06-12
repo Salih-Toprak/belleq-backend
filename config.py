@@ -25,6 +25,18 @@ class Settings(BaseSettings):
     EMBEDDING_OLLAMA_URL: str = ""  # e.g. http://10.0.1.20:11434
     EMBEDDING_MODEL: str = "nomic-embed-text"
 
+    # Conversation fact-extraction credentials. Set these ONCE here on the
+    # (static) backend; they are pushed to every context at provision time, so
+    # the ephemeral masters/containers never store them. Set GEMINI_API_KEY and
+    # extraction turns on automatically.
+    CONVERSATION_EXTRACTION_ENABLED: bool = True
+    EXTRACTION_BACKEND: str = "gemini"  # "gemini" | "anthropic"
+    GEMINI_API_KEY: str = ""
+    GEMINI_MODEL: str = "gemini-2.5-flash"
+    # Only needed if EXTRACTION_BACKEND=anthropic.
+    EXTRACTION_ANTHROPIC_API_KEY: str = ""
+    EXTRACTION_MODEL: str = "claude-haiku-4-5"
+
     INTERNAL_POLL_INTERVAL: int = 15
     INTERNAL_POLL_TIMEOUT: int = 600
     CORS_ORIGINS: str = "http://localhost:3000,https://belleq.app,https://www.belleq.app"
@@ -32,6 +44,25 @@ class Settings(BaseSettings):
     @property
     def cors_origins_list(self) -> list[str]:
         return [o.strip() for o in self.CORS_ORIGINS.split(",")]
+
+    @property
+    def extraction_payload(self) -> dict:
+        """Extraction config sent to the master at provision time.
+
+        ``enabled`` is true only when extraction is on AND a key exists for the
+        chosen backend — so setting just the Gemini key is enough to turn it on,
+        and leaving it blank produces no noisy extraction failures.
+        """
+        backend = (self.EXTRACTION_BACKEND or "gemini").strip().lower()
+        key = self.GEMINI_API_KEY if backend == "gemini" else self.EXTRACTION_ANTHROPIC_API_KEY
+        return {
+            "enabled": bool(self.CONVERSATION_EXTRACTION_ENABLED and (key or "").strip()),
+            "backend": backend,
+            "gemini_api_key": self.GEMINI_API_KEY,
+            "gemini_model": self.GEMINI_MODEL,
+            "anthropic_api_key": self.EXTRACTION_ANTHROPIC_API_KEY,
+            "extraction_model": self.EXTRACTION_MODEL,
+        }
 
     model_config = {"env_file": ".env", "extra": "ignore"}
 
