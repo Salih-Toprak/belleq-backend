@@ -55,6 +55,9 @@ QDRANT_COLLECTION=belleq_knowledge
 EMBEDDING_BACKEND=ollama
 OLLAMA_BASE_URL={embedding_url}
 OLLAMA_EMBED_MODEL={embedding_model}
+CREDENTIAL_ENCRYPTION_KEY={credential_encryption_key}
+BACKEND_SYNC_URL={backend_sync_url}
+BACKEND_INTERNAL_TOKEN={backend_internal_token}
 ENVEOF
 
 # ── Authenticate to GHCR ──────────────────────────────────────────────────────
@@ -98,6 +101,9 @@ def _launch_instance(
     user_data = user_data.replace("{github_token}", settings.GITHUB_TOKEN)
     user_data = user_data.replace("{embedding_url}", settings.EMBEDDING_OLLAMA_URL)
     user_data = user_data.replace("{embedding_model}", settings.EMBEDDING_MODEL)
+    user_data = user_data.replace("{credential_encryption_key}", settings.CREDENTIAL_ENCRYPTION_KEY)
+    user_data = user_data.replace("{backend_sync_url}", settings.BACKEND_PUBLIC_URL)
+    user_data = user_data.replace("{backend_internal_token}", settings.BACKEND_INTERNAL_TOKEN)
 
     itype = instance_type or settings.AWS_INSTANCE_TYPE or "t3.large"
     instance_tags = tags or [{"Key": "Name", "Value": instance_name}]
