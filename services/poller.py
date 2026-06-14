@@ -6,8 +6,42 @@ import httpx
 
 from config import settings
 from database import get_supabase
+from services import scheduler
 
 logger = logging.getLogger(__name__)
+
+
+async def empty_host_sweep_loop(
+    interval_seconds: int | None = None,
+    min_age_minutes: int | None = None,
+) -> None:
+    """Periodically terminate hosts that have no active contexts.
+
+    Runs forever as a background task (started at app startup). Belt-and-
+    suspenders alongside the per-delete teardown: catches hosts left empty by
+    failed/partial deletes or direct DB edits so we never pay for idle EC2.
+    Never raises out of the loop — a bad iteration is logged and retried.
+    """
+    interval = interval_seconds or settings.EMPTY_HOST_SWEEP_INTERVAL
+    min_age = (
+        min_age_minutes
+        if min_age_minutes is not None
+        else settings.EMPTY_HOST_SWEEP_MIN_AGE_MINUTES
+    )
+    logger.info(
+        "empty_host_sweep_loop started interval=%ds min_age=%dm", interval, min_age
+    )
+    while True:
+        # Sleep first so we don't sweep during startup churn.
+        await asyncio.sleep(interval)
+        try:
+            n = await scheduler.terminate_empty_hosts(min_age_minutes=min_age)
+            if n:
+                logger.info("empty_host_sweep terminated=%d", n)
+        except asyncio.CancelledError:
+            raise
+        except Exception:  # noqa: BLE001
+            logger.exception("empty_host_sweep_loop iteration failed")
 
 
 async def poll_until_ready(environment_id: str):

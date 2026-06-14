@@ -15,7 +15,7 @@ from routers.environments import router as environments_router
 from routers.mcp_bridge import router as mcp_bridge_router
 from routers.proxy import router as proxy_router
 from routers.workspace_proxy import router as workspace_proxy_router
-from services.poller import poll_until_ready
+from services.poller import empty_host_sweep_loop, poll_until_ready
 
 logging.basicConfig(
     level=logging.INFO,
@@ -88,6 +88,14 @@ async def resume_provisioning_polls():
     for env in result.data:
         logger.info("Resuming poller for environment %s", env["id"])
         asyncio.create_task(poll_until_ready(env["id"]))
+
+
+@app.on_event("startup")
+async def start_empty_host_sweep():
+    """Background loop terminating empty hosts so we never pay for idle EC2."""
+    if settings.EMPTY_HOST_SWEEP_ENABLED:
+        asyncio.create_task(empty_host_sweep_loop())
+        logger.info("empty_host_sweep scheduled")
 
 
 @app.get("/health")
