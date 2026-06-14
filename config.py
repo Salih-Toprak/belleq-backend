@@ -39,6 +39,12 @@ class Settings(BaseSettings):
 
     INTERNAL_POLL_INTERVAL: int = 15
     INTERNAL_POLL_TIMEOUT: int = 600
+
+    # Background sweep that terminates hosts with no active contexts so we never
+    # pay for idle EC2. Belt-and-suspenders alongside the per-delete teardown.
+    EMPTY_HOST_SWEEP_ENABLED: bool = True
+    EMPTY_HOST_SWEEP_INTERVAL: int = 600          # seconds between sweeps
+    EMPTY_HOST_SWEEP_MIN_AGE_MINUTES: int = 15    # skip hosts younger than this
     CORS_ORIGINS: str = "http://localhost:3000,https://belleq.app,https://www.belleq.app"
 
     @property
