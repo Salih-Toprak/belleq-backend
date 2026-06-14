@@ -37,6 +37,16 @@ class Settings(BaseSettings):
     EXTRACTION_ANTHROPIC_API_KEY: str = ""
     EXTRACTION_MODEL: str = "claude-haiku-4-5"
 
+    # Connector durability. Connectors are stored per-account here in Postgres
+    # (the only static server) so they survive their EC2 host being terminated.
+    # CREDENTIAL_ENCRYPTION_KEY is a Fernet key shared with every master: masters
+    # encrypt connector secrets with it before mirroring, and the backend stores
+    # only that ciphertext (never decrypts). BACKEND_INTERNAL_TOKEN authenticates
+    # masters mirroring back; BACKEND_PUBLIC_URL is the master→backend base URL.
+    CREDENTIAL_ENCRYPTION_KEY: str = ""
+    BACKEND_INTERNAL_TOKEN: str = ""
+    BACKEND_PUBLIC_URL: str = ""  # e.g. https://api.belleq.app
+
     INTERNAL_POLL_INTERVAL: int = 15
     INTERNAL_POLL_TIMEOUT: int = 600
 

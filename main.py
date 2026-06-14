@@ -9,6 +9,7 @@ from fastapi.responses import JSONResponse
 from config import settings
 from database import get_supabase
 from routers.auth import router as auth_router
+from routers.connectors import router as connectors_router
 from routers.containers import router as containers_router
 from routers.contexts import router as contexts_router
 from routers.environments import router as environments_router
@@ -65,6 +66,7 @@ app.include_router(auth_router, prefix="/auth", tags=["auth"])
 app.include_router(environments_router, prefix="/environments", tags=["environments"])
 app.include_router(containers_router, tags=["containers"])
 app.include_router(contexts_router, tags=["contexts"])
+app.include_router(connectors_router, tags=["connectors"])
 app.include_router(workspace_proxy_router, tags=["workspace-proxy"])
 app.include_router(proxy_router, tags=["proxy"])
 app.include_router(mcp_bridge_router, tags=["mcp-bridge"])

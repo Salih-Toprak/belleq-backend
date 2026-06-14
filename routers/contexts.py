@@ -24,7 +24,7 @@ from config import settings
 from database import get_supabase
 from plan_config import ResourceCaps, is_unlimited, plan_for_role
 from rbac import require_plan, require_role
-from services import scheduler
+from services import connector_store, scheduler
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/contexts", tags=["contexts"])
@@ -60,6 +60,52 @@ async def _master_delete(host: dict, container_name: str) -> None:
             f"{host['master_endpoint']}/master/containers/{container_name}",
             headers=headers,
         )
+
+
+async def _rehydrate_connectors(host: dict, workspace_id: str) -> None:
+    """Push the workspace's stored connectors onto its (possibly fresh) master.
+
+    Best-effort: a connector restore failure must not fail context provisioning.
+    The master stores the encrypted blobs verbatim and skips rows it already has
+    a newer copy of, so this is safe to call on every provision.
+    """
+    try:
+        rows = connector_store.list_for_workspace(workspace_id)
+        if not rows:
+            return
+        items = [
+            {
+                "connector_id": r["connector_id"],
+                "display_name": r.get("display_name", ""),
+                "transport": r.get("transport", "streamable_http"),
+                "url": r.get("url", ""),
+                "command": r.get("command", ""),
+                "args": r.get("args", []) or [],
+                "enabled": bool(r.get("enabled", True)),
+                "auth_status": r.get("auth_status", "none"),
+                "tool_count": int(r.get("tool_count", 0) or 0),
+                "last_status": r.get("last_status", "unknown"),
+                "secrets_encrypted": r.get("secrets_encrypted", "{}") or "{}",
+                "metadata": r.get("metadata", {}) or {},
+                "added_at": r.get("added_at"),
+                "updated_at": r.get("updated_at"),
+            }
+            for r in rows
+        ]
+        headers = {"X-Admin-Key": host["master_api_key"], "Content-Type": "application/json"}
+        async with httpx.AsyncClient(timeout=60.0) as client:
+            resp = await client.post(
+                f"{host['master_endpoint']}/master/mcp/connectors/import",
+                json={"connectors": items},
+                headers=headers,
+            )
+            resp.raise_for_status()
+        logger.info(
+            "connectors_rehydrated ws=%s host=%s count=%s",
+            workspace_id, host["id"], len(items),
+        )
+    except Exception:  # noqa: BLE001
+        logger.exception("connector_rehydrate_failed ws=%s host=%s", workspace_id, host.get("id"))
 
 
 @router.post("/provision", status_code=201)
@@ -167,6 +213,10 @@ async def _provision_bg(context_id, workspace_id, role, name, container_name, co
                 "status": "running" if result.get("healthy") else "starting",
             }
         ).eq("id", context_id).execute()
+        # Restore the workspace's connectors onto this host's master. Crucial
+        # when the host is fresh (first context, or after an empty-host teardown):
+        # connectors persisted on the backend reappear automatically.
+        await _rehydrate_connectors(host, workspace_id)
         logger.info("context_provisioned id=%s host=%s", context_id, host["id"])
     except Exception as exc:  # noqa: BLE001
         logger.exception("context_provision_failed id=%s", context_id)
