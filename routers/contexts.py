@@ -23,7 +23,7 @@ from auth import get_current_user
 from config import settings
 from database import get_supabase
 from plan_config import ResourceCaps, is_unlimited, plan_for_role
-from rbac import require_plan
+from rbac import require_plan, require_role
 from services import scheduler
 
 logger = logging.getLogger(__name__)
@@ -181,6 +181,20 @@ async def _provision_bg(context_id, workspace_id, role, name, container_name, co
         ).eq("id", context_id).execute()
 
 
+@router.post("/admin/terminate-empty-hosts")
+async def admin_terminate_empty_hosts(
+    min_age_minutes: int = 10,
+    _: dict = Depends(require_role("admin")),
+):
+    """Admin: terminate every host with no active contexts (clean up idle EC2).
+
+    ``min_age_minutes`` skips very young hosts that may be mid-provision; pass 0
+    to sweep everything. New deletes already trigger this per-host automatically.
+    """
+    terminated = await scheduler.terminate_empty_hosts(min_age_minutes=min_age_minutes)
+    return {"terminated": terminated}
+
+
 @router.get("")
 async def list_contexts(user: dict = Depends(get_current_user)):
     sb = get_supabase()
@@ -225,24 +239,40 @@ async def delete_context(context_id: str, user: dict = Depends(get_current_user)
     if not r.data:
         raise HTTPException(status_code=404, detail="Context not found")
     ctx = r.data
+    host_id = ctx.get("host_id")
 
-    if ctx.get("host_id"):
+    # Best-effort teardown on the host's master. Wrapped so a wedged/unreachable
+    # master can never block the DB cleanup below (otherwise the row lingers and
+    # the delete looks like it "didn't save").
+    if host_id:
         host = (
-            sb.table("hosts").select("*").eq("id", ctx["host_id"]).maybe_single().execute()
+            sb.table("hosts").select("*").eq("id", host_id).maybe_single().execute()
         ).data
         if host:
             try:
                 await _master_delete(host, ctx["container_name"])
             except Exception:  # noqa: BLE001
                 logger.exception("master_delete_failed context=%s", context_id)
-            caps = ResourceCaps(
-                ram_mb=ctx.get("ram_cap_mb") or 0,
-                cpu_vcpu=float(ctx.get("cpu_cap_vcpu") or 0),
-                disk_gb=ctx.get("disk_cap_gb") or 0,
-            )
-            scheduler.release_capacity(host["id"], caps)
+            try:
+                caps = ResourceCaps(
+                    ram_mb=ctx.get("ram_cap_mb") or 0,
+                    cpu_vcpu=float(ctx.get("cpu_cap_vcpu") or 0),
+                    disk_gb=ctx.get("disk_cap_gb") or 0,
+                )
+                scheduler.release_capacity(host["id"], caps)
+            except Exception:  # noqa: BLE001
+                logger.exception("release_capacity_failed context=%s", context_id)
 
-    sb.table("containers").update({"status": "stopped"}).eq("id", context_id).execute()
+    # Hard-delete the row so the context is actually gone from the DB.
+    sb.table("containers").delete().eq("id", context_id).execute()
     sb.table("audit_logs").insert(
         {"user_id": user["id"], "action": "context.delete", "resource_id": context_id}
     ).execute()
+
+    # Cost control: if the host has no contexts left, terminate its EC2 instance
+    # and remove the host row so we never pay for an empty instance.
+    if host_id:
+        try:
+            await scheduler.terminate_host_if_empty(host_id)
+        except Exception:  # noqa: BLE001
+            logger.exception("terminate_host_if_empty_failed host=%s", host_id)

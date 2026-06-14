@@ -248,3 +248,75 @@ async def place_or_provision(
     if not reserve_capacity(host["id"], caps):
         raise RuntimeError(f"freshly provisioned host {host['id']} had no capacity")
     return host
+
+
+# ── Teardown (don't pay for empty instances) ─────────────────────────
+
+def _active_context_count(host_id: str) -> int:
+    sb = get_supabase()
+    return (
+        sb.table("containers")
+        .select("id", count="exact")
+        .eq("host_id", host_id)
+        .neq("status", "stopped")
+        .execute()
+    ).count or 0
+
+
+async def terminate_host_if_empty(host_id: str) -> bool:
+    """Terminate a host's EC2 instance + delete its row when it has no contexts.
+
+    Called after a context is deleted so we never pay for an idle instance.
+    Returns True if the host was terminated. Idempotent and best-effort: if the
+    EC2 termination call fails the row is kept so a later sweep can retry.
+    """
+    if not host_id:
+        return False
+    sb = get_supabase()
+    if _active_context_count(host_id) > 0:
+        return False
+
+    host = sb.table("hosts").select("*").eq("id", host_id).maybe_single().execute().data
+    if not host:
+        return False
+
+    instance_id = host.get("ec2_instance_id")
+    region = host.get("region") or settings.AWS_REGION
+    if instance_id:
+        try:
+            await aws.terminate_ec2(instance_id, region)
+        except Exception:  # noqa: BLE001
+            logger.exception("terminate_ec2_failed host=%s instance=%s", host_id, instance_id)
+            return False  # keep the row; don't lose track of a still-running instance
+
+    sb.table("hosts").delete().eq("id", host_id).execute()
+    logger.info("empty_host_terminated host=%s instance=%s", host_id, instance_id)
+    return True
+
+
+async def terminate_empty_hosts(min_age_minutes: int = 10) -> int:
+    """Sweep every host and terminate the ones with no active contexts.
+
+    Skips hosts younger than ``min_age_minutes`` so a freshly provisioned host
+    (whose context row isn't linked yet) isn't torn down mid-provision. Returns
+    the number terminated. Safe to call periodically or on demand.
+    """
+    sb = get_supabase()
+    rows = sb.table("hosts").select("id, created_at").execute().data or []
+    cutoff = datetime.now(timezone.utc).timestamp() - max(0, min_age_minutes) * 60
+    terminated = 0
+    for h in rows:
+        try:
+            created = datetime.fromisoformat(str(h.get("created_at")).replace("Z", "+00:00"))
+            if created.timestamp() > cutoff:
+                continue  # too young — may be mid-provision
+        except (ValueError, TypeError):
+            pass
+        try:
+            if await terminate_host_if_empty(h["id"]):
+                terminated += 1
+        except Exception:  # noqa: BLE001
+            logger.exception("sweep_terminate_failed host=%s", h.get("id"))
+    if terminated:
+        logger.info("empty_host_sweep_terminated count=%d", terminated)
+    return terminated
