@@ -119,6 +119,26 @@ def _launch_instance(
         ],
     }
 
+    # Size the root volume from config — the AMI default (~8 GB) fills up once
+    # qdrant + ollama + master + user images share one disk. Look up the AMI's
+    # root device name so the mapping attaches to the correct device.
+    if settings.AWS_ROOT_VOLUME_GB:
+        try:
+            img = ec2.describe_images(ImageIds=[settings.AWS_AMI_ID])["Images"][0]
+            root_dev = img.get("RootDeviceName", "/dev/xvda")
+        except Exception:  # noqa: BLE001
+            root_dev = "/dev/xvda"
+        params["BlockDeviceMappings"] = [
+            {
+                "DeviceName": root_dev,
+                "Ebs": {
+                    "VolumeSize": settings.AWS_ROOT_VOLUME_GB,
+                    "VolumeType": "gp3",
+                    "DeleteOnTermination": True,
+                },
+            }
+        ]
+
     if settings.AWS_SECURITY_GROUP_ID:
         params["SecurityGroupIds"] = [settings.AWS_SECURITY_GROUP_ID]
 

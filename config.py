@@ -15,6 +15,11 @@ class Settings(BaseSettings):
     AWS_INSTANCE_TYPE: str = ""
     AWS_KEY_PAIR_NAME: str = ""
     AWS_SECURITY_GROUP_ID: str = ""
+    # Root EBS size for launched masters. The AMI default (~8 GB) is too small:
+    # steady-state lands ~9 GB (ollama image alone is ~4.5 GB unpacked), and a
+    # `docker compose pull` of ollama:latest transiently spikes to ~12 GB. 16 GB
+    # clears that peak with ~4 GB headroom while staying cheap (~$1.3/mo gp3).
+    AWS_ROOT_VOLUME_GB: int = 16
 
     GITHUB_TOKEN: str = ""
     BELLEQ_MASTER_IMAGE: str = "Salih-Toprak/belleq-master.git"
