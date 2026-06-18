@@ -235,6 +235,59 @@ async def _provision_bg(context_id, workspace_id, role, name, container_name, co
         ).eq("id", context_id).execute()
 
 
+@router.post("/rebuild-master")
+async def rebuild_master(user: dict = Depends(get_current_user)):
+    """Rebuild the master(s) serving this workspace to the newest image.
+
+    A workspace's contexts live on a home host (affinity), so this is usually a
+    single master. On a shared host that master serves other workspaces too, so
+    the rebuild briefly restarts it for everyone on that host — the data volume
+    (Qdrant) is preserved, so no knowledge is lost.
+    """
+    sb = get_supabase()
+    workspace_id = user["id"]
+    rows = (
+        sb.table("containers")
+        .select("host_id")
+        .eq("workspace_id", workspace_id)
+        .neq("status", "stopped")
+        .not_.is_("host_id", "null")
+        .execute()
+    ).data or []
+    host_ids = sorted({r["host_id"] for r in rows if r.get("host_id")})
+    if not host_ids:
+        raise HTTPException(
+            status_code=409,
+            detail="No active context yet — there's no master to rebuild.",
+        )
+
+    results: list[dict] = []
+    for hid in host_ids:
+        host = (
+            sb.table("hosts").select("*").eq("id", hid).maybe_single().execute()
+        ).data
+        if not host or not host.get("master_endpoint"):
+            results.append({"host_id": hid, "ok": False, "error": "host not found"})
+            continue
+        try:
+            headers = {"X-Admin-Key": host["master_api_key"]}
+            async with httpx.AsyncClient(timeout=180.0) as client:
+                r = await client.post(
+                    f"{host['master_endpoint']}/master/containers/self/rebuild",
+                    headers=headers,
+                )
+                r.raise_for_status()
+                results.append({"host_id": hid, "ok": True, **r.json()})
+        except Exception as exc:  # noqa: BLE001
+            logger.exception("rebuild_master_failed ws=%s host=%s", workspace_id, hid)
+            results.append({"host_id": hid, "ok": False, "error": str(exc)[:300]})
+
+    sb.table("audit_logs").insert(
+        {"user_id": workspace_id, "action": "master.rebuild", "resource_id": ",".join(host_ids)}
+    ).execute()
+    return {"hosts": results, "count": len(host_ids)}
+
+
 @router.post("/admin/terminate-empty-hosts")
 async def admin_terminate_empty_hosts(
     min_age_minutes: int = 10,
