@@ -41,6 +41,10 @@ class CreateContextBody(BaseModel):
     region: str = "eu-west-1"
 
 
+class RenameContextBody(BaseModel):
+    name: str
+
+
 async def _master_provision(host: dict, payload: dict) -> dict:
     headers = {"X-Admin-Key": host["master_api_key"], "Content-Type": "application/json"}
     async with httpx.AsyncClient(timeout=120.0) as client:
@@ -273,6 +277,149 @@ async def context_status(context_id: str, user: dict = Depends(get_current_user)
     if not r.data:
         raise HTTPException(status_code=404, detail="Context not found")
     return r.data
+
+
+def _owned_context_or_404(sb, context_id: str, workspace_id: str) -> dict:
+    r = (
+        sb.table("containers")
+        .select("*")
+        .eq("id", context_id)
+        .eq("workspace_id", workspace_id)
+        .maybe_single()
+        .execute()
+    )
+    if not r.data:
+        raise HTTPException(status_code=404, detail="Context not found")
+    return r.data
+
+
+@router.patch("/{context_id}")
+async def rename_context(
+    context_id: str,
+    body: RenameContextBody,
+    user: dict = Depends(get_current_user),
+):
+    """Rename a context. The container name + MCP endpoint (keyed by id) are
+    unchanged — only the human-facing display name moves, in the DB and, best
+    effort, on the host's master registry."""
+    name = body.name.strip()
+    if not name:
+        raise HTTPException(status_code=422, detail="Name cannot be empty")
+    sb = get_supabase()
+    ctx = _owned_context_or_404(sb, context_id, user["id"])
+
+    sb.table("containers").update({"name": name}).eq("id", context_id).execute()
+
+    # Best-effort: update the display name on the master registry too.
+    host_id = ctx.get("host_id")
+    if host_id:
+        host = (
+            sb.table("hosts").select("*").eq("id", host_id).maybe_single().execute()
+        ).data
+        if host:
+            try:
+                headers = {"X-Admin-Key": host["master_api_key"], "Content-Type": "application/json"}
+                async with httpx.AsyncClient(timeout=15.0) as client:
+                    await client.patch(
+                        f"{host['master_endpoint']}/master/registry/containers/{ctx['container_name']}",
+                        json={"display_name": name},
+                        headers=headers,
+                    )
+            except Exception:  # noqa: BLE001
+                logger.warning("master_rename_failed context=%s", context_id)
+
+    sb.table("audit_logs").insert(
+        {"user_id": user["id"], "action": "context.rename", "resource_id": context_id}
+    ).execute()
+    return _public({**ctx, "name": name})
+
+
+@router.get("/{context_id}/api-key")
+async def context_api_key(context_id: str, user: dict = Depends(get_current_user)):
+    """Reveal the context's API key. Owner-only; deliberately excluded from the
+    default (redacted) context payload, so it has its own endpoint."""
+    sb = get_supabase()
+    ctx = _owned_context_or_404(sb, context_id, user["id"])
+    return {"id": context_id, "api_key": ctx.get("api_key", "")}
+
+
+@router.post("/{context_id}/rebuild")
+async def rebuild_context(context_id: str, user: dict = Depends(get_current_user)):
+    """Re-pull the newest published image and recreate the container in place.
+
+    The context keeps its id, endpoint, API key, and knowledge base (the data
+    volume is preserved on the host); only the running image is refreshed.
+    """
+    sb = get_supabase()
+    ctx = _owned_context_or_404(sb, context_id, user["id"])
+    host_id = ctx.get("host_id")
+    if not host_id:
+        raise HTTPException(
+            status_code=409,
+            detail="Context has no host yet — wait for provisioning to finish before rebuilding.",
+        )
+
+    sb.table("containers").update(
+        {"status": "provisioning", "error_message": None}
+    ).eq("id", context_id).execute()
+    sb.table("audit_logs").insert(
+        {"user_id": user["id"], "action": "context.rebuild", "resource_id": context_id}
+    ).execute()
+
+    asyncio.create_task(_rebuild_bg(context_id, user["id"], ctx, host_id))
+    logger.info("context_rebuild_started id=%s ws=%s", context_id, user["id"])
+    return _public({**ctx, "status": "provisioning", "error_message": None})
+
+
+async def _rebuild_bg(context_id: str, workspace_id: str, ctx: dict, host_id: str):
+    sb = get_supabase()
+    try:
+        host = (
+            sb.table("hosts").select("*").eq("id", host_id).maybe_single().execute()
+        ).data
+        if not host:
+            raise RuntimeError("Host record not found for this context")
+
+        caps = ResourceCaps(
+            ram_mb=ctx.get("ram_cap_mb") or 0,
+            cpu_vcpu=float(ctx.get("cpu_cap_vcpu") or 0),
+            disk_gb=ctx.get("disk_cap_gb") or 0,
+        )
+        labels = naming.docker_labels(
+            role="context",
+            workspace_id=workspace_id,
+            context_id=context_id,
+            context_name=ctx.get("name", ""),
+            plan=ctx.get("plan", ""),
+            host_pool=host.get("pool"),
+        )
+        payload = {
+            "container_name": ctx["container_name"],
+            "display_name": ctx.get("name", ""),
+            "api_key": ctx.get("api_key"),
+            "user_id": workspace_id,
+            "workspace_id": workspace_id,
+            "plan": ctx.get("plan", ""),
+            "caps": caps.as_payload(),
+            "labels": labels,
+            "qdrant_collection": ctx.get("qdrant_collection"),
+            "container_type": "user",
+            "extraction": settings.extraction_payload,
+            "force_pull": True,
+        }
+        result = await _master_provision(host, payload)
+        sb.table("containers").update(
+            {"status": "running" if result.get("healthy") else "starting"}
+        ).eq("id", context_id).execute()
+        # The recreated container is a fresh master registry entry — make sure
+        # the workspace's connectors are present on it again.
+        await _rehydrate_connectors(host, workspace_id)
+        logger.info("context_rebuilt id=%s host=%s", context_id, host_id)
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("context_rebuild_failed id=%s", context_id)
+        sb.table("containers").update(
+            {"status": "error", "error_message": str(exc)[:500]}
+        ).eq("id", context_id).execute()
 
 
 @router.delete("/{context_id}", status_code=204)
