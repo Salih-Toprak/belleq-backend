@@ -155,7 +155,16 @@ async def openapi_spec(request: Request):
     """Self-describing spec a user can import into ChatGPT Actions, or hand to any
     function-calling client (Gemini, etc.). Server URL is derived from the request
     so it works on any deployment host."""
-    base = str(request.base_url).rstrip("/")
+    # Behind a TLS-terminating proxy/ALB the app sees plain http, but the public
+    # API is served over https — and ChatGPT Actions rejects non-https servers.
+    # Honour X-Forwarded-Proto, and upgrade http->https for non-local hosts.
+    host = request.headers.get("host") or request.url.hostname or ""
+    proto = request.headers.get("x-forwarded-proto", "").split(",")[0].strip()
+    if not proto:
+        proto = request.url.scheme
+    if proto == "http" and host and not host.startswith(("localhost", "127.0.0.1")):
+        proto = "https"
+    base = f"{proto}://{host}".rstrip("/")
     return {
         "openapi": "3.1.0",
         "info": {
