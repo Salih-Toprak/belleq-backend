@@ -396,6 +396,51 @@ async def context_api_key(context_id: str, user: dict = Depends(get_current_user
     return {"id": context_id, "api_key": ctx.get("api_key", "")}
 
 
+@router.post("/{context_id}/regenerate-api-key")
+async def regenerate_api_key(context_id: str, user: dict = Depends(get_current_user)):
+    """Rotate the context's REST API key.
+
+    The API key is the bearer token for the REST API (`/v1/*`) used by non-MCP
+    providers (ChatGPT, Gemini, etc.). Rotating it:
+      1. writes a fresh key to the DB (the REST auth source of truth) — old key
+         stops working immediately, the new one works at once, no restart needed;
+      2. best-effort syncs the key onto the host's master registry so internal
+         master↔container calls keep matching.
+
+    The MCP endpoint (`mcp.belleq.app/c/{id}`) is keyed by the context id, not the
+    API key, so existing MCP connections (Claude, Cursor, …) are unaffected.
+    """
+    sb = get_supabase()
+    ctx = _owned_context_or_404(sb, context_id, user["id"])
+
+    new_key = secrets.token_hex(32)
+    sb.table("containers").update({"api_key": new_key}).eq("id", context_id).execute()
+
+    # Best-effort: keep the master registry's stored key in sync.
+    host_id = ctx.get("host_id")
+    if host_id:
+        host = (
+            sb.table("hosts").select("*").eq("id", host_id).maybe_single().execute()
+        ).data
+        if host and host.get("master_endpoint"):
+            try:
+                headers = {"X-Admin-Key": host["master_api_key"], "Content-Type": "application/json"}
+                async with httpx.AsyncClient(timeout=15.0) as client:
+                    await client.patch(
+                        f"{host['master_endpoint']}/master/registry/containers/{ctx['container_name']}",
+                        json={"api_key": new_key},
+                        headers=headers,
+                    )
+            except Exception:  # noqa: BLE001
+                logger.warning("master_apikey_sync_failed context=%s", context_id)
+
+    sb.table("audit_logs").insert(
+        {"user_id": user["id"], "action": "context.regenerate_api_key", "resource_id": context_id}
+    ).execute()
+    logger.info("context_api_key_regenerated id=%s ws=%s", context_id, user["id"])
+    return {"id": context_id, "api_key": new_key}
+
+
 @router.post("/{context_id}/rebuild")
 async def rebuild_context(context_id: str, user: dict = Depends(get_current_user)):
     """Re-pull the newest published image and recreate the container in place.

@@ -13,6 +13,7 @@ from routers.connectors import router as connectors_router
 from routers.containers import router as containers_router
 from routers.contexts import router as contexts_router
 from routers.environments import router as environments_router
+from routers.kb_api import router as kb_api_router
 from routers.mcp_bridge import router as mcp_bridge_router
 from routers.proxy import router as proxy_router
 from routers.workspace_proxy import router as workspace_proxy_router
@@ -70,6 +71,7 @@ app.include_router(connectors_router, tags=["connectors"])
 app.include_router(workspace_proxy_router, tags=["workspace-proxy"])
 app.include_router(proxy_router, tags=["proxy"])
 app.include_router(mcp_bridge_router, tags=["mcp-bridge"])
+app.include_router(kb_api_router, tags=["kb-rest-api"])
 
 
 @app.on_event("startup")
