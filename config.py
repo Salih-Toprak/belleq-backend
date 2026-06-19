@@ -62,6 +62,13 @@ class Settings(BaseSettings):
     EMPTY_HOST_SWEEP_MIN_AGE_MINUTES: int = 15    # skip hosts younger than this
     CORS_ORIGINS: str = "http://localhost:3000,https://belleq.app,https://www.belleq.app"
 
+    # Host-based routing. The REST API (`/v1/*`) is served ONLY on API_HOST; the
+    # MCP bridge + dashboard control plane are served everywhere else (i.e. on
+    # MCP_HOST). This keeps each subdomain to its designated traffic. Leave
+    # API_HOST blank to disable host gating (dev / single-host deploys).
+    API_HOST: str = "api.belleq.app"
+    MCP_HOST: str = "mcp.belleq.app"
+
     @property
     def cors_origins_list(self) -> list[str]:
         return [o.strip() for o in self.CORS_ORIGINS.split(",")]

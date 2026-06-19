@@ -38,6 +38,58 @@ app.add_middleware(
 )
 
 
+def _request_host(request: Request) -> str:
+    """The hostname the client addressed, honouring the TLS-terminating proxy."""
+    raw = request.headers.get("x-forwarded-host") or request.headers.get("host") or ""
+    return raw.split(",")[0].split(":")[0].strip().lower()
+
+
+def _is_api_path(path: str) -> bool:
+    return path == "/v1" or path.startswith("/v1/")
+
+
+# Always reachable regardless of host (infra health checks, root).
+_HOST_AGNOSTIC_PATHS = {"/", "/health"}
+
+
+@app.middleware("http")
+async def enforce_host_routing(request: Request, call_next):
+    """Keep each subdomain to its designated traffic.
+
+    - The REST API (`/v1/*`) is accepted ONLY on ``API_HOST`` (api.belleq.app).
+    - Everything else (MCP bridge + dashboard control plane) is accepted only on
+      other hosts (mcp.belleq.app) and rejected on the API host.
+
+    Disabled when ``API_HOST`` is blank. CORS preflight (OPTIONS) and a couple of
+    infra paths always pass so health checks and browsers aren't broken.
+    """
+    api_host = (settings.API_HOST or "").strip().lower()
+    if (
+        not api_host
+        or request.method == "OPTIONS"
+        or request.url.path in _HOST_AGNOSTIC_PATHS
+    ):
+        return await call_next(request)
+
+    host = _request_host(request)
+    on_api_host = host == api_host
+    is_api = _is_api_path(request.url.path)
+
+    # API host: serve only the API. Other hosts: never serve the API.
+    if on_api_host != is_api:
+        return JSONResponse(
+            status_code=404,
+            content={
+                "detail": (
+                    f"This endpoint is not served on '{host}'. "
+                    f"Use https://{api_host} for the REST API (/v1/*), "
+                    f"and {settings.MCP_HOST} for MCP and dashboard requests."
+                )
+            },
+        )
+    return await call_next(request)
+
+
 @app.exception_handler(Exception)
 async def unhandled_exception_handler(request: Request, exc: Exception):
     """Catch-all so unhandled exceptions still return CORS headers.
