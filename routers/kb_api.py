@@ -52,6 +52,13 @@ class RecordBody(BaseModel):
     conversation_id: str = ""
 
 
+class UploadBody(BaseModel):
+    filename: str
+    content_base64: str = ""
+    text: str = ""
+    title: str = ""
+
+
 def _context_for_key(api_key: str) -> dict:
     """Resolve a bearer api_key to its (active) context row, or 401/409."""
     key = (api_key or "").strip()
@@ -148,6 +155,22 @@ async def record(
 async def flush(authorization: str = Header(default="")):
     """Ingest buffered exchanges into the knowledge base immediately."""
     return await _call_kb(_bearer(authorization), "flush", {})
+
+
+@router.post("/upload", summary="Add a document to memory")
+async def upload(body: UploadBody, authorization: str = Header(default="")):
+    """Add a document (PDF/DOCX/MD/TXT/HTML as base64, or plain text) to the
+    knowledge base. Chunked, embedded, and indexed in the background."""
+    return await _call_kb(
+        _bearer(authorization),
+        "upload",
+        {
+            "filename": body.filename,
+            "content_base64": body.content_base64,
+            "text": body.text,
+            "title": body.title,
+        },
+    )
 
 
 @router.get("/openapi.json", summary="OpenAPI spec for ChatGPT Actions / function calling")
@@ -252,6 +275,30 @@ async def openapi_spec(request: Request):
                     "operationId": "flushMemory",
                     "summary": "Index buffered exchanges immediately",
                     "responses": {"200": {"description": "Ingestion counts"}},
+                }
+            },
+            "/v1/upload": {
+                "post": {
+                    "operationId": "uploadDocument",
+                    "summary": "Add a document (text or base64 file) to memory",
+                    "requestBody": {
+                        "required": True,
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "object",
+                                    "required": ["filename"],
+                                    "properties": {
+                                        "filename": {"type": "string"},
+                                        "content_base64": {"type": "string"},
+                                        "text": {"type": "string"},
+                                        "title": {"type": "string"},
+                                    },
+                                }
+                            }
+                        },
+                    },
+                    "responses": {"200": {"description": "Queued document job"}},
                 }
             },
         },
