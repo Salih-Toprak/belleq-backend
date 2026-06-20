@@ -89,7 +89,7 @@ def _build_run_payload(task: dict, agent: dict, ctx: dict) -> dict:
     the trusted private network (backend -> master -> container); it is never
     logged or returned to a client."""
     api_key = ""
-    if (agent.get("provider") or "belleq") == "byok":
+    if (agent.get("provider") or "belleq") in ("byok", "openrouter"):
         api_key = agent_store.get_agent_decrypted_key(agent)
 
     return {
