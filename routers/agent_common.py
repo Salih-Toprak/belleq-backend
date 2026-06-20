@@ -14,7 +14,9 @@ from database import get_supabase
 from services import connector_store
 
 KB_SCOPES = {"master", "scoped", "both"}
-PROVIDERS = {"belleq", "byok"}
+PROVIDERS = {"belleq", "byok", "openrouter"}
+# Providers that carry the user's own API key (encrypted at rest, required).
+KEYED_PROVIDERS = {"byok", "openrouter"}
 AGENT_STATUSES = {"active", "paused", "archived"}
 
 

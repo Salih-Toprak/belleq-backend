@@ -17,6 +17,7 @@ from crypto import encrypt_secret
 from routers.agent_common import (
     AGENT_STATUSES,
     KB_SCOPES,
+    KEYED_PROVIDERS,
     PROVIDERS,
     owned_context_or_404,
     validate_connector_ids,
@@ -64,8 +65,8 @@ async def create_agent(
     validate_enum(body.kb_scope, KB_SCOPES, "kb_scope")
     validate_enum(body.provider, PROVIDERS, "provider")
     validate_connector_ids(ws, body.connector_ids)
-    if body.provider == "byok" and not body.api_key.strip():
-        raise HTTPException(status_code=422, detail="BYOK provider requires an api_key")
+    if body.provider in KEYED_PROVIDERS and not body.api_key.strip():
+        raise HTTPException(status_code=422, detail=f"{body.provider} provider requires an api_key")
 
     row = {
         "context_id": context_id,
@@ -76,7 +77,7 @@ async def create_agent(
         "kb_section_ids": body.kb_section_ids,
         "connector_ids": body.connector_ids,
         "provider": body.provider,
-        "api_key_encrypted": encrypt_secret(body.api_key) if body.provider == "byok" else None,
+        "api_key_encrypted": encrypt_secret(body.api_key) if body.provider in KEYED_PROVIDERS else None,
         "model": body.model,
         "budget_limit_usd": body.budget_limit_usd,
         "status": "active",
@@ -141,16 +142,17 @@ async def update_agent(
     if body.api_key is not None:
         patch["api_key_encrypted"] = encrypt_secret(body.api_key) if body.api_key.strip() else None
 
-    # Guard: a BYOK agent must end up with a key (either an existing one or a new
-    # one in this patch). Prevents switching belleq -> byok with no key, which
-    # would fail at run time when the executor tries to decrypt nothing.
+    # Guard: a keyed-provider agent (byok / openrouter) must end up with a key
+    # (either an existing one or a new one in this patch). Prevents switching
+    # belleq -> byok/openrouter with no key, which would fail at run time when the
+    # executor tries to decrypt nothing.
     final_provider = patch.get("provider", agent.get("provider"))
-    if final_provider == "byok":
+    if final_provider in KEYED_PROVIDERS:
         has_key = bool((agent.get("api_key_encrypted") or "").strip())
         setting_key = "api_key_encrypted" in patch and bool(patch["api_key_encrypted"])
         clearing_key = "api_key_encrypted" in patch and not patch["api_key_encrypted"]
         if (not has_key and not setting_key) or clearing_key:
-            raise HTTPException(status_code=422, detail="BYOK provider requires an api_key")
+            raise HTTPException(status_code=422, detail=f"{final_provider} provider requires an api_key")
 
     updated = agent_store.update_agent(agent_id, patch)
     return agent_store.public_agent(updated or agent)
