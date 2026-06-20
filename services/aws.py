@@ -58,6 +58,7 @@ OLLAMA_EMBED_MODEL={embedding_model}
 CREDENTIAL_ENCRYPTION_KEY={credential_encryption_key}
 BACKEND_SYNC_URL={backend_sync_url}
 BACKEND_INTERNAL_TOKEN={backend_internal_token}
+SELF_BASE_URL=http://belleq-master:9000
 ENVEOF
 
 # ── Authenticate to GHCR ──────────────────────────────────────────────────────

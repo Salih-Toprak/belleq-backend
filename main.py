@@ -8,14 +8,17 @@ from fastapi.responses import JSONResponse
 
 from config import settings
 from database import get_supabase
+from routers.agents import router as agents_router
 from routers.auth import router as auth_router
 from routers.connectors import router as connectors_router
 from routers.containers import router as containers_router
 from routers.contexts import router as contexts_router
 from routers.environments import router as environments_router
 from routers.kb_api import router as kb_api_router
+from routers.kb_review import router as kb_review_router
 from routers.mcp_bridge import router as mcp_bridge_router
 from routers.proxy import router as proxy_router
+from routers.tasks import router as tasks_router
 from routers.workspace_proxy import router as workspace_proxy_router
 from services.poller import empty_host_sweep_loop, poll_until_ready
 
@@ -124,6 +127,9 @@ app.include_router(workspace_proxy_router, tags=["workspace-proxy"])
 app.include_router(proxy_router, tags=["proxy"])
 app.include_router(mcp_bridge_router, tags=["mcp-bridge"])
 app.include_router(kb_api_router, tags=["kb-rest-api"])
+app.include_router(agents_router)
+app.include_router(tasks_router)
+app.include_router(kb_review_router)
 
 
 @app.on_event("startup")
@@ -152,6 +158,21 @@ async def start_empty_host_sweep():
     if settings.EMPTY_HOST_SWEEP_ENABLED:
         asyncio.create_task(empty_host_sweep_loop())
         logger.info("empty_host_sweep scheduled")
+
+
+@app.on_event("startup")
+async def start_agent_scheduler():
+    """Start the agent task cron scheduler and re-register active cron tasks.
+
+    Process-local (dies with the backend), so it reloads jobs from the DB on
+    every boot — same resume-on-restart pattern as the provisioning pollers.
+    """
+    try:
+        from services import agent_scheduler
+
+        agent_scheduler.start()
+    except Exception:  # noqa: BLE001 — scheduler must never block startup
+        logger.exception("agent_scheduler_start_failed")
 
 
 @app.get("/health")
