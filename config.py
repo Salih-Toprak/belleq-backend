@@ -88,7 +88,9 @@ class Settings(BaseSettings):
             "backend": backend,
             "gemini_api_key": self.GEMINI_API_KEY,
             "gemini_model": self.GEMINI_MODEL,
-            "anthropic_api_key": self.EXTRACTION_ANTHROPIC_API_KEY,
+            # Only propagate the Anthropic key when extraction_backend=anthropic so
+            # a stale/wrong EXTRACTION_ANTHROPIC_API_KEY never poisons Gemini containers.
+            "anthropic_api_key": self.EXTRACTION_ANTHROPIC_API_KEY if backend == "anthropic" else "",
             "extraction_model": self.EXTRACTION_MODEL,
         }
 
