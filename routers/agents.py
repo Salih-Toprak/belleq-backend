@@ -131,13 +131,26 @@ async def update_agent(
     if body.model is not None:
         patch["model"] = body.model
     if body.budget_limit_usd is not None:
-        patch["budget_limit_usd"] = body.budget_limit_usd
+        # <= 0 means "no daily limit" (the UI sends 0 to clear an existing budget,
+        # since a JSON null can't be told apart from an omitted field here).
+        patch["budget_limit_usd"] = None if body.budget_limit_usd <= 0 else body.budget_limit_usd
     if body.status is not None:
         validate_enum(body.status, AGENT_STATUSES, "status")
         patch["status"] = body.status
     # Key rotation: a provided api_key is (re)encrypted; "" clears it.
     if body.api_key is not None:
         patch["api_key_encrypted"] = encrypt_secret(body.api_key) if body.api_key.strip() else None
+
+    # Guard: a BYOK agent must end up with a key (either an existing one or a new
+    # one in this patch). Prevents switching belleq -> byok with no key, which
+    # would fail at run time when the executor tries to decrypt nothing.
+    final_provider = patch.get("provider", agent.get("provider"))
+    if final_provider == "byok":
+        has_key = bool((agent.get("api_key_encrypted") or "").strip())
+        setting_key = "api_key_encrypted" in patch and bool(patch["api_key_encrypted"])
+        clearing_key = "api_key_encrypted" in patch and not patch["api_key_encrypted"]
+        if (not has_key and not setting_key) or clearing_key:
+            raise HTTPException(status_code=422, detail="BYOK provider requires an api_key")
 
     updated = agent_store.update_agent(agent_id, patch)
     return agent_store.public_agent(updated or agent)
