@@ -27,7 +27,7 @@ import httpx
 
 from config import settings
 from database import get_supabase
-from services import agent_store
+from services import agent_store, connector_store
 
 logger = logging.getLogger(__name__)
 
@@ -184,7 +184,7 @@ async def trigger_run(task_id: str) -> None:
         out = resp.json()
 
         _persist_result(task, agent, ctx, out)
-        await _fire_notification(agent, task, out)
+        await _fire_notification(agent, task, ctx, host, out)
         logger.info(
             "agent_run_complete task=%s agent=%s status=%s cost=%.4f",
             task_id, agent["id"], out.get("status", "completed"), float(out.get("cost_usd", 0) or 0),
@@ -200,30 +200,75 @@ async def trigger_run(task_id: str) -> None:
             logger.exception("agent_run_failmark_failed task=%s", task_id)
 
 
-async def _fire_notification(agent: dict, task: dict, out: dict) -> None:
-    """Best-effort webhook on run completion/failure. Posts a compact JSON summary
-    to the agent's notify_url (Slack/Discord/Zapier-compatible). Never raises."""
-    url = (agent.get("notify_url") or "").strip()
-    if not url:
+# Connector display-name / id fragments that mark a messaging connector the agent
+# can deliver notifications through.
+_MESSAGING_HINTS = ("slack", "discord", "telegram", "teams", "mattermost")
+
+
+def _messaging_connector_ids(agent: dict) -> list[str]:
+    """The agent's attached connectors that look like a messaging channel."""
+    attached = set(agent.get("connector_ids") or [])
+    if not attached:
+        return []
+    out: list[str] = []
+    for c in connector_store.list_for_workspace(agent.get("workspace_id", "")):
+        cid = c.get("connector_id")
+        if cid not in attached:
+            continue
+        hay = f"{cid} {c.get('display_name', '')}".lower()
+        if any(h in hay for h in _MESSAGING_HINTS):
+            out.append(cid)
+    return out
+
+
+async def _fire_notification(agent: dict, task: dict, ctx: dict, host: dict, out: dict) -> None:
+    """Notify the user of a finished run (success OR failure) by posting a summary
+    through an attached Slack/Discord/etc. connector. No webhook URL or API key —
+    the user just attaches a messaging connector and flips on notifications.
+
+    Delivery is deterministic (the backend triggers it regardless of run outcome)
+    and runs in the container, which calls the connector's send-message tool. All
+    best-effort: a failed notification never affects the run."""
+    if not agent.get("notify_enabled"):
         return
+    # The user explicitly picks which communication connector(s) to notify
+    # through; fall back to auto-detecting a messaging connector among the
+    # agent's tools for older agents that predate the selector.
+    messaging_ids = list(agent.get("notify_connector_ids") or []) or _messaging_connector_ids(agent)
+    if not messaging_ids:
+        logger.info("agent_notify_skipped_no_connector agent=%s", agent.get("id"))
+        return
+
     status = out.get("status") or "completed"
-    result = (out.get("result") or out.get("final_text") or "")[:1500]
+    result = (out.get("result") or out.get("final_text") or "").strip()[:1200]
+    cost = float(out.get("cost_usd", 0) or 0)
+    verb = "completed" if status == "completed" else f"finished with status: {status}"
+    message = (
+        f"🔔 Agent “{agent.get('name')}” {verb}.\n\n"
+        f"Task: {(task.get('instruction') or '').strip()[:300]}\n\n"
+        f"{result or '(no text result)'}\n\n"
+        f"(${cost:.4f} spent)"
+    )
+
+    api_key = ""
+    if (agent.get("provider") or "belleq") in ("byok", "openrouter"):
+        api_key = agent_store.get_agent_decrypted_key(agent)
     payload = {
-        "event": "agent_run_finished",
-        "status": status,
-        "agent_id": agent.get("id"),
-        "agent_name": agent.get("name"),
-        "task_id": task.get("id"),
-        "instruction": (task.get("instruction") or "")[:500],
-        "result": result,
-        "cost_usd": float(out.get("cost_usd", 0) or 0),
-        "tokens_used": int(out.get("tokens_used", 0) or 0),
-        # Slack/Discord render `text`; richer clients can use the fields above.
-        "text": f"Agent “{agent.get('name')}” run {status} — ${float(out.get('cost_usd', 0) or 0):.4f}. {result[:300]}",
+        "agent": {
+            "id": agent.get("id"),
+            "name": agent.get("name", ""),
+            "provider": agent.get("provider", "belleq"),
+            "model": agent.get("model", ""),
+            "api_key": api_key,
+            "connector_ids": messaging_ids,
+        },
+        "message": message,
     }
+    target = f"{host['master_endpoint']}/master/agents/{ctx['container_name']}/notify"
+    headers = {"X-Admin-Key": host["master_api_key"], "Content-Type": "application/json"}
     try:
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            await client.post(url, json=payload)
+        async with httpx.AsyncClient(timeout=60.0) as client:
+            await client.post(target, json=payload, headers=headers)
     except Exception:  # noqa: BLE001 — notifications are best-effort
         logger.warning("agent_notify_failed agent=%s", agent.get("id"), exc_info=True)
 
