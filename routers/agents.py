@@ -39,7 +39,8 @@ class CreateAgentBody(BaseModel):
     api_key: str = ""  # BYOK plaintext; encrypted at rest, never returned
     model: str = ""
     budget_limit_usd: float | None = None
-    notify_url: str = ""  # webhook fired on run completion/failure
+    notify_enabled: bool = False  # message me via a communication connector
+    notify_connector_ids: list[str] = Field(default_factory=list)
 
 
 class UpdateAgentBody(BaseModel):
@@ -53,7 +54,8 @@ class UpdateAgentBody(BaseModel):
     model: str | None = None
     budget_limit_usd: float | None = None
     status: str | None = None
-    notify_url: str | None = None  # "" clears the webhook
+    notify_enabled: bool | None = None
+    notify_connector_ids: list[str] | None = None
 
 
 @router.post("/contexts/{context_id}/agents", status_code=201)
@@ -67,6 +69,7 @@ async def create_agent(
     validate_enum(body.kb_scope, KB_SCOPES, "kb_scope")
     validate_enum(body.provider, PROVIDERS, "provider")
     validate_connector_ids(ws, body.connector_ids)
+    validate_connector_ids(ws, body.notify_connector_ids)
     if body.provider in KEYED_PROVIDERS and not body.api_key.strip():
         raise HTTPException(status_code=422, detail=f"{body.provider} provider requires an api_key")
 
@@ -82,7 +85,8 @@ async def create_agent(
         "api_key_encrypted": encrypt_secret(body.api_key) if body.provider in KEYED_PROVIDERS else None,
         "model": body.model,
         "budget_limit_usd": body.budget_limit_usd,
-        "notify_url": body.notify_url.strip() or None,
+        "notify_enabled": body.notify_enabled,
+        "notify_connector_ids": body.notify_connector_ids,
         "status": "active",
     }
     created = agent_store.create_agent(row)
@@ -141,8 +145,11 @@ async def update_agent(
     if body.status is not None:
         validate_enum(body.status, AGENT_STATUSES, "status")
         patch["status"] = body.status
-    if body.notify_url is not None:
-        patch["notify_url"] = body.notify_url.strip() or None
+    if body.notify_enabled is not None:
+        patch["notify_enabled"] = body.notify_enabled
+    if body.notify_connector_ids is not None:
+        validate_connector_ids(ws, body.notify_connector_ids)
+        patch["notify_connector_ids"] = body.notify_connector_ids
     # Key rotation: a provided api_key is (re)encrypted; "" clears it.
     if body.api_key is not None:
         patch["api_key_encrypted"] = encrypt_secret(body.api_key) if body.api_key.strip() else None

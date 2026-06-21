@@ -33,8 +33,8 @@ CREATE TABLE IF NOT EXISTS public.agents (
   model              text NOT NULL DEFAULT '',      -- e.g. claude-sonnet-4-6, gpt-4o
   budget_limit_usd   double precision,              -- max spend/day; null = unlimited
   status             text NOT NULL DEFAULT 'active',-- active | paused | archived
-  notify_url         text,                          -- webhook fired on run completion/failure (Slack/Discord/Zapier-compatible)
-  notify_email       text,                          -- optional email notification (requires backend SMTP)
+  notify_enabled     boolean NOT NULL DEFAULT false,-- message me via a communication connector on run finish
+  notify_connector_ids jsonb NOT NULL DEFAULT '[]'::jsonb,-- which communication connectors to notify through
   created_at         timestamptz NOT NULL DEFAULT now(),
   updated_at         timestamptz NOT NULL DEFAULT now()
 );
@@ -108,6 +108,6 @@ ALTER TABLE public.kb_review_queue ENABLE ROW LEVEL SECURITY;
 
 -- ── migrations for existing deployments (idempotent) ─────────────────────────
 -- Run these if the tables already exist from an earlier version.
-ALTER TABLE public.agent_tasks ADD COLUMN IF NOT EXISTS run_token    text;
-ALTER TABLE public.agents      ADD COLUMN IF NOT EXISTS notify_url   text;
-ALTER TABLE public.agents      ADD COLUMN IF NOT EXISTS notify_email text;
+ALTER TABLE public.agent_tasks ADD COLUMN IF NOT EXISTS run_token            text;
+ALTER TABLE public.agents      ADD COLUMN IF NOT EXISTS notify_enabled       boolean NOT NULL DEFAULT false;
+ALTER TABLE public.agents      ADD COLUMN IF NOT EXISTS notify_connector_ids jsonb NOT NULL DEFAULT '[]'::jsonb;
