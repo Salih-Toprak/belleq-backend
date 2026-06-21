@@ -54,9 +54,10 @@ CREATE TABLE IF NOT EXISTS public.agent_tasks (
   context_id    uuid NOT NULL,
   workspace_id  text NOT NULL,
   instruction   text NOT NULL DEFAULT '',
-  status        text NOT NULL DEFAULT 'pending',    -- pending | running | completed | failed
+  status        text NOT NULL DEFAULT 'pending',    -- pending | running | completed | failed | cancelled
   trigger       text NOT NULL DEFAULT 'manual',     -- manual | <cron expr> | webhook | telegram
   run_token     text,                               -- per-run secret authorizing live step callbacks
+  cancel_requested boolean NOT NULL DEFAULT false,  -- user asked to stop the run; container stops at the next step
   reply_chat    text,                               -- telegram chat id to reply to (two-way chat)
   result        text,
   kb_writes     jsonb NOT NULL DEFAULT '[]'::jsonb,
@@ -115,6 +116,7 @@ ALTER TABLE public.kb_review_queue ENABLE ROW LEVEL SECURITY;
 -- ── migrations for existing deployments (idempotent) ─────────────────────────
 -- Run these if the tables already exist from an earlier version.
 ALTER TABLE public.agent_tasks ADD COLUMN IF NOT EXISTS run_token            text;
+ALTER TABLE public.agent_tasks ADD COLUMN IF NOT EXISTS cancel_requested     boolean NOT NULL DEFAULT false;
 ALTER TABLE public.agent_tasks ADD COLUMN IF NOT EXISTS reply_chat           text;
 ALTER TABLE public.agents      ADD COLUMN IF NOT EXISTS notify_enabled       boolean NOT NULL DEFAULT false;
 ALTER TABLE public.agents      ADD COLUMN IF NOT EXISTS notify_connector_ids jsonb NOT NULL DEFAULT '[]'::jsonb;

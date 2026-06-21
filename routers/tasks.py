@@ -90,10 +90,25 @@ async def run_task(task_id: str, user: dict = Depends(get_current_user)):
     if task.get("status") == "running":
         raise HTTPException(status_code=409, detail="Task is already running")
 
-    agent_store.update_task(task_id, {"status": "pending"})
+    agent_store.update_task(task_id, {"status": "pending", "cancel_requested": False})
     asyncio.create_task(agent_runner.trigger_run(task_id))
     logger.info("agent_task_run_triggered id=%s ws=%s", task_id, user["id"])
     return {"id": task_id, "status": "pending", "message": "Run enqueued"}
+
+
+@router.post("/tasks/{task_id}/cancel")
+async def cancel_task(task_id: str, user: dict = Depends(get_current_user)):
+    """Stop a run on demand. Marks the task cancelled immediately (so the UI
+    updates now) and flags cancel_requested — the container checks this at each
+    step and stops cleanly; any late result won't override the cancelled state."""
+    task = agent_store.get_owned_task(task_id, user["id"])
+    if not task:
+        raise HTTPException(status_code=404, detail="Task not found")
+    if task.get("status") not in ("pending", "running"):
+        return {"id": task_id, "status": task.get("status"), "message": "Not running"}
+    agent_store.update_task(task_id, {"status": "cancelled", "cancel_requested": True})
+    logger.info("agent_task_cancel_requested id=%s ws=%s", task_id, user["id"])
+    return {"id": task_id, "status": "cancelled"}
 
 
 @router.get("/tasks/{task_id}/runs")
@@ -154,7 +169,9 @@ async def agent_step_callback(body: StepCallbackBody):
     task = agent_store.get_task(body.task_id)
     if not task or (task.get("run_token") or "") != body.token or not body.token:
         raise HTTPException(status_code=403, detail="Invalid run token")
-    if task.get("status") not in ("running",):
+    # Only promote pending -> running; never clobber a cancelled task back to running.
+    if task.get("status") == "pending":
         agent_store.update_task(body.task_id, {"status": "running"})
     written = agent_store.upsert_run_steps(body.task_id, task["agent_id"], body.steps)
-    return {"ok": True, "steps": written}
+    # Tell the container to stop at this step boundary if the user hit Stop.
+    return {"ok": True, "steps": written, "cancel": bool(task.get("cancel_requested"))}
