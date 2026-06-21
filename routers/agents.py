@@ -20,7 +20,6 @@ from routers.agent_common import (
     KEYED_PROVIDERS,
     PROVIDERS,
     owned_context_or_404,
-    validate_connector_ids,
     validate_enum,
 )
 from services import agent_store
@@ -68,8 +67,10 @@ async def create_agent(
     owned_context_or_404(context_id, ws)
     validate_enum(body.kb_scope, KB_SCOPES, "kb_scope")
     validate_enum(body.provider, PROVIDERS, "provider")
-    validate_connector_ids(ws, body.connector_ids)
-    validate_connector_ids(ws, body.notify_connector_ids)
+    # No connector-id validation: agents inherit whatever connectors are enabled
+    # for their context, and notify connectors may live only on the master (not
+    # yet mirrored to the durable store), so validating against it gives false
+    # "unknown connector" errors.
     if body.provider in KEYED_PROVIDERS and not body.api_key.strip():
         raise HTTPException(status_code=422, detail=f"{body.provider} provider requires an api_key")
 
@@ -131,7 +132,6 @@ async def update_agent(
     if body.kb_section_ids is not None:
         patch["kb_section_ids"] = body.kb_section_ids
     if body.connector_ids is not None:
-        validate_connector_ids(ws, body.connector_ids)
         patch["connector_ids"] = body.connector_ids
     if body.provider is not None:
         validate_enum(body.provider, PROVIDERS, "provider")
@@ -148,7 +148,6 @@ async def update_agent(
     if body.notify_enabled is not None:
         patch["notify_enabled"] = body.notify_enabled
     if body.notify_connector_ids is not None:
-        validate_connector_ids(ws, body.notify_connector_ids)
         patch["notify_connector_ids"] = body.notify_connector_ids
     # Key rotation: a provided api_key is (re)encrypted; "" clears it.
     if body.api_key is not None:
