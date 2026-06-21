@@ -296,17 +296,20 @@ def _persist_result(task: dict, agent: dict, ctx: dict, out: dict) -> None:
     queue shared writes for review."""
     kb_writes = out.get("kb_writes", []) or []
     status = out.get("status") or "completed"
-    agent_store.update_task(
-        task["id"],
-        {
-            "status": status,
-            "result": (out.get("result") or out.get("final_text") or "")[:100000],
-            "kb_writes": kb_writes,
-            "tokens_used": int(out.get("tokens_used", 0) or 0),
-            "cost_usd": float(out.get("cost_usd", 0) or 0),
-            "completed_at": _now(),
-        },
-    )
+    # If the user hit Stop, keep it cancelled — don't let a late-finishing run
+    # flip it back to completed/failed.
+    current = agent_store.get_task(task["id"]) or {}
+    cancelled = current.get("status") == "cancelled" or current.get("cancel_requested")
+    patch = {
+        "kb_writes": kb_writes,
+        "tokens_used": int(out.get("tokens_used", 0) or 0),
+        "cost_usd": float(out.get("cost_usd", 0) or 0),
+        "completed_at": _now(),
+    }
+    if not cancelled:
+        patch["status"] = status
+        patch["result"] = (out.get("result") or out.get("final_text") or "")[:100000]
+    agent_store.update_task(task["id"], patch)
     # Authoritative reconcile: replaces any steps streamed live during the run.
     agent_store.replace_runs(task["id"], agent["id"], out.get("runs", []) or [])
     propagate_to_master_kb(kb_writes, agent, ctx, task_id=task["id"])
