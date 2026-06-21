@@ -42,6 +42,11 @@ class Settings(BaseSettings):
     EXTRACTION_ANTHROPIC_API_KEY: str = ""
     EXTRACTION_MODEL: str = "claude-haiku-4-5"
 
+    # Agent web access. Platform-wide Tavily key pushed to every context at
+    # provision time so agents get web_search/web_fetch with no per-context setup.
+    # Blank = agents simply have no web tools.
+    TAVILY_API_KEY: str = ""
+
     # Connector durability. Connectors are stored per-account here in Postgres
     # (the only static server) so they survive their EC2 host being terminated.
     # CREDENTIAL_ENCRYPTION_KEY is a Fernet key shared with every master: masters
@@ -92,6 +97,9 @@ class Settings(BaseSettings):
             # a stale/wrong EXTRACTION_ANTHROPIC_API_KEY never poisons Gemini containers.
             "anthropic_api_key": self.EXTRACTION_ANTHROPIC_API_KEY if backend == "anthropic" else "",
             "extraction_model": self.EXTRACTION_MODEL,
+            # Agent web access — not extraction-related, but rides the same
+            # provision-time secret channel to the container.
+            "tavily_api_key": self.TAVILY_API_KEY,
         }
 
     model_config = {"env_file": ".env", "extra": "ignore"}

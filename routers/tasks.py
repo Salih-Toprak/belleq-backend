@@ -26,6 +26,12 @@ class CreateTaskBody(BaseModel):
     run_now: bool = False
 
 
+class StepCallbackBody(BaseModel):
+    task_id: str
+    token: str
+    steps: list[dict] = []
+
+
 def _owned_agent_or_404(agent_id: str, workspace_id: str) -> dict:
     agent = agent_store.get_owned_agent(agent_id, workspace_id)
     if not agent:
@@ -59,13 +65,13 @@ async def create_task(
     if body.run_now:
         asyncio.create_task(agent_runner.trigger_run(task["id"]))
         logger.info("agent_task_created_and_running id=%s agent=%s", task["id"], agent_id)
-    return task
+    return agent_store.public_task(task)
 
 
 @router.get("/agents/{agent_id}/tasks")
 async def list_tasks(agent_id: str, user: dict = Depends(get_current_user)):
     _owned_agent_or_404(agent_id, user["id"])
-    return agent_store.list_tasks(agent_id, user["id"])
+    return [agent_store.public_task(t) for t in agent_store.list_tasks(agent_id, user["id"])]
 
 
 @router.get("/tasks/{task_id}")
@@ -73,7 +79,7 @@ async def get_task(task_id: str, user: dict = Depends(get_current_user)):
     task = agent_store.get_owned_task(task_id, user["id"])
     if not task:
         raise HTTPException(status_code=404, detail="Task not found")
-    return task
+    return agent_store.public_task(task)
 
 
 @router.post("/tasks/{task_id}/run")
@@ -133,3 +139,22 @@ async def agent_webhook(agent_id: str, request: Request):
     asyncio.create_task(agent_runner.trigger_run(task["id"]))
     logger.info("agent_webhook_fired agent=%s task=%s", agent_id, task["id"])
     return {"task_id": task["id"], "status": "pending"}
+
+
+@router.post("/internal/agents/step")
+async def agent_step_callback(body: StepCallbackBody):
+    """Live-progress sink: the user container streams each run step here as it
+    happens so the dashboard can show the run unfold in real time.
+
+    Authenticated by the per-run token (minted in agent_runner.trigger_run and
+    stored on the task) — not a user session and not the shared internal token,
+    so a container can only append steps to the one task it was handed. The final
+    authoritative step set is reconciled by agent_runner.replace_runs at the end.
+    """
+    task = agent_store.get_task(body.task_id)
+    if not task or (task.get("run_token") or "") != body.token or not body.token:
+        raise HTTPException(status_code=403, detail="Invalid run token")
+    if task.get("status") not in ("running",):
+        agent_store.update_task(body.task_id, {"status": "running"})
+    written = agent_store.upsert_run_steps(body.task_id, task["agent_id"], body.steps)
+    return {"ok": True, "steps": written}

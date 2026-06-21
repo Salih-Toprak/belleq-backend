@@ -39,6 +39,7 @@ class CreateAgentBody(BaseModel):
     api_key: str = ""  # BYOK plaintext; encrypted at rest, never returned
     model: str = ""
     budget_limit_usd: float | None = None
+    notify_url: str = ""  # webhook fired on run completion/failure
 
 
 class UpdateAgentBody(BaseModel):
@@ -52,6 +53,7 @@ class UpdateAgentBody(BaseModel):
     model: str | None = None
     budget_limit_usd: float | None = None
     status: str | None = None
+    notify_url: str | None = None  # "" clears the webhook
 
 
 @router.post("/contexts/{context_id}/agents", status_code=201)
@@ -80,6 +82,7 @@ async def create_agent(
         "api_key_encrypted": encrypt_secret(body.api_key) if body.provider in KEYED_PROVIDERS else None,
         "model": body.model,
         "budget_limit_usd": body.budget_limit_usd,
+        "notify_url": body.notify_url.strip() or None,
         "status": "active",
     }
     created = agent_store.create_agent(row)
@@ -138,6 +141,8 @@ async def update_agent(
     if body.status is not None:
         validate_enum(body.status, AGENT_STATUSES, "status")
         patch["status"] = body.status
+    if body.notify_url is not None:
+        patch["notify_url"] = body.notify_url.strip() or None
     # Key rotation: a provided api_key is (re)encrypted; "" clears it.
     if body.api_key is not None:
         patch["api_key_encrypted"] = encrypt_secret(body.api_key) if body.api_key.strip() else None
