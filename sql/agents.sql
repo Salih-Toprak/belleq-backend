@@ -35,6 +35,11 @@ CREATE TABLE IF NOT EXISTS public.agents (
   status             text NOT NULL DEFAULT 'active',-- active | paused | archived
   notify_enabled     boolean NOT NULL DEFAULT false,-- message me via a communication connector on run finish
   notify_connector_ids jsonb NOT NULL DEFAULT '[]'::jsonb,-- which communication connectors to notify through
+  -- Two-way Telegram chat: message the agent's bot, it runs and replies.
+  telegram_enabled       boolean NOT NULL DEFAULT false,
+  telegram_bot_token_encrypted text,          -- Fernet ciphertext (backend-owned, decryptable here)
+  telegram_secret        text,                -- webhook secret_token Telegram echoes back for auth
+  telegram_allowed_chats jsonb NOT NULL DEFAULT '[]'::jsonb, -- optional chat-id allowlist ([] = any)
   created_at         timestamptz NOT NULL DEFAULT now(),
   updated_at         timestamptz NOT NULL DEFAULT now()
 );
@@ -50,8 +55,9 @@ CREATE TABLE IF NOT EXISTS public.agent_tasks (
   workspace_id  text NOT NULL,
   instruction   text NOT NULL DEFAULT '',
   status        text NOT NULL DEFAULT 'pending',    -- pending | running | completed | failed
-  trigger       text NOT NULL DEFAULT 'manual',     -- manual | <cron expr> | webhook
+  trigger       text NOT NULL DEFAULT 'manual',     -- manual | <cron expr> | webhook | telegram
   run_token     text,                               -- per-run secret authorizing live step callbacks
+  reply_chat    text,                               -- telegram chat id to reply to (two-way chat)
   result        text,
   kb_writes     jsonb NOT NULL DEFAULT '[]'::jsonb,
   tokens_used   integer NOT NULL DEFAULT 0,
@@ -109,5 +115,10 @@ ALTER TABLE public.kb_review_queue ENABLE ROW LEVEL SECURITY;
 -- ── migrations for existing deployments (idempotent) ─────────────────────────
 -- Run these if the tables already exist from an earlier version.
 ALTER TABLE public.agent_tasks ADD COLUMN IF NOT EXISTS run_token            text;
+ALTER TABLE public.agent_tasks ADD COLUMN IF NOT EXISTS reply_chat           text;
 ALTER TABLE public.agents      ADD COLUMN IF NOT EXISTS notify_enabled       boolean NOT NULL DEFAULT false;
 ALTER TABLE public.agents      ADD COLUMN IF NOT EXISTS notify_connector_ids jsonb NOT NULL DEFAULT '[]'::jsonb;
+ALTER TABLE public.agents      ADD COLUMN IF NOT EXISTS telegram_enabled       boolean NOT NULL DEFAULT false;
+ALTER TABLE public.agents      ADD COLUMN IF NOT EXISTS telegram_bot_token_encrypted text;
+ALTER TABLE public.agents      ADD COLUMN IF NOT EXISTS telegram_secret        text;
+ALTER TABLE public.agents      ADD COLUMN IF NOT EXISTS telegram_allowed_chats jsonb NOT NULL DEFAULT '[]'::jsonb;

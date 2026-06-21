@@ -16,6 +16,7 @@ from routers.contexts import router as contexts_router
 from routers.environments import router as environments_router
 from routers.kb_api import router as kb_api_router
 from routers.kb_review import router as kb_review_router
+from routers.telegram import router as telegram_router
 from routers.mcp_bridge import router as mcp_bridge_router
 from routers.proxy import router as proxy_router
 from routers.tasks import router as tasks_router
@@ -135,6 +136,7 @@ app.include_router(kb_api_router, tags=["kb-rest-api"])
 app.include_router(agents_router)
 app.include_router(tasks_router)
 app.include_router(kb_review_router)
+app.include_router(telegram_router)
 
 
 @app.on_event("startup")
@@ -178,6 +180,18 @@ async def start_agent_scheduler():
         agent_scheduler.start()
     except Exception:  # noqa: BLE001 — scheduler must never block startup
         logger.exception("agent_scheduler_start_failed")
+
+
+@app.on_event("startup")
+async def recover_orphaned_agent_runs():
+    """Clear agent tasks left stuck at 'running' by a previous backend restart —
+    their in-flight run died with the process and can't be resumed."""
+    try:
+        from services import agent_store
+
+        agent_store.fail_orphaned_running_tasks()
+    except Exception:  # noqa: BLE001 — recovery must never block startup
+        logger.exception("orphaned_task_recovery_failed")
 
 
 @app.get("/health")
