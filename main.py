@@ -71,6 +71,11 @@ async def enforce_host_routing(request: Request, call_next):
         not api_host
         or request.method == "OPTIONS"
         or request.url.path in _HOST_AGNOSTIC_PATHS
+        # Machine-to-machine endpoints (master→backend connector mirror,
+        # container→backend run-step callback) are token-authed and must work
+        # regardless of which host BACKEND_PUBLIC_URL points to — never host-gate
+        # them, or the connector mirror / live progress silently 404.
+        or request.url.path.startswith("/internal/")
     ):
         return await call_next(request)
 
