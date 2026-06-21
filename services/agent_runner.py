@@ -20,10 +20,12 @@ passed to the executor so a single long run can stop itself mid-loop.
 from __future__ import annotations
 
 import logging
+import secrets
 from datetime import datetime, timezone
 
 import httpx
 
+from config import settings
 from database import get_supabase
 from services import agent_store
 
@@ -84,6 +86,19 @@ def _budget_remaining(agent: dict) -> float | None:
     return max(0.0, float(limit) - agent_store.agent_spend_today(agent["id"]))
 
 
+def _build_step_callback(task_id: str, run_token: str) -> dict | None:
+    """Where the container streams each step as it happens, for live progress.
+
+    Disabled (returns None) when no public backend URL is configured — the run
+    still works, the UI just shows steps only after completion. The per-run token
+    (not the shared internal token) is what the container holds, so a container
+    can only write to the one task it was handed."""
+    base = (getattr(settings, "BACKEND_PUBLIC_URL", "") or "").strip().rstrip("/")
+    if not base or not run_token:
+        return None
+    return {"url": f"{base}/internal/agents/step", "token": run_token, "task_id": task_id}
+
+
 def _build_run_payload(task: dict, agent: dict, ctx: dict) -> dict:
     """The executor's input. The BYOK key is decrypted here and travels only over
     the trusted private network (backend -> master -> container); it is never
@@ -93,6 +108,7 @@ def _build_run_payload(task: dict, agent: dict, ctx: dict) -> dict:
         api_key = agent_store.get_agent_decrypted_key(agent)
 
     return {
+        "step_callback": _build_step_callback(task["id"], task.get("run_token", "")),
         "task": {
             "id": task["id"],
             "instruction": task.get("instruction", ""),
@@ -151,7 +167,11 @@ async def trigger_run(task_id: str) -> None:
             return
 
         ctx, host = _context_and_host(agent["context_id"])
-        agent_store.update_task(task_id, {"status": "running"})
+        # Per-run token authorizes the container's live step callbacks for THIS
+        # task only. Stored on the task; validated by /internal/agents/step.
+        run_token = secrets.token_urlsafe(24)
+        agent_store.update_task(task_id, {"status": "running", "run_token": run_token})
+        task["run_token"] = run_token
 
         payload = _build_run_payload(task, agent, ctx)
         target = f"{host['master_endpoint']}/master/agents/{ctx['container_name']}/run"
@@ -164,6 +184,7 @@ async def trigger_run(task_id: str) -> None:
         out = resp.json()
 
         _persist_result(task, agent, ctx, out)
+        await _fire_notification(agent, task, out)
         logger.info(
             "agent_run_complete task=%s agent=%s status=%s cost=%.4f",
             task_id, agent["id"], out.get("status", "completed"), float(out.get("cost_usd", 0) or 0),
@@ -177,6 +198,34 @@ async def trigger_run(task_id: str) -> None:
             )
         except Exception:  # noqa: BLE001
             logger.exception("agent_run_failmark_failed task=%s", task_id)
+
+
+async def _fire_notification(agent: dict, task: dict, out: dict) -> None:
+    """Best-effort webhook on run completion/failure. Posts a compact JSON summary
+    to the agent's notify_url (Slack/Discord/Zapier-compatible). Never raises."""
+    url = (agent.get("notify_url") or "").strip()
+    if not url:
+        return
+    status = out.get("status") or "completed"
+    result = (out.get("result") or out.get("final_text") or "")[:1500]
+    payload = {
+        "event": "agent_run_finished",
+        "status": status,
+        "agent_id": agent.get("id"),
+        "agent_name": agent.get("name"),
+        "task_id": task.get("id"),
+        "instruction": (task.get("instruction") or "")[:500],
+        "result": result,
+        "cost_usd": float(out.get("cost_usd", 0) or 0),
+        "tokens_used": int(out.get("tokens_used", 0) or 0),
+        # Slack/Discord render `text`; richer clients can use the fields above.
+        "text": f"Agent “{agent.get('name')}” run {status} — ${float(out.get('cost_usd', 0) or 0):.4f}. {result[:300]}",
+    }
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            await client.post(url, json=payload)
+    except Exception:  # noqa: BLE001 — notifications are best-effort
+        logger.warning("agent_notify_failed agent=%s", agent.get("id"), exc_info=True)
 
 
 def _persist_result(task: dict, agent: dict, ctx: dict, out: dict) -> None:
@@ -195,7 +244,8 @@ def _persist_result(task: dict, agent: dict, ctx: dict, out: dict) -> None:
             "completed_at": _now(),
         },
     )
-    agent_store.insert_runs(task["id"], agent["id"], out.get("runs", []) or [])
+    # Authoritative reconcile: replaces any steps streamed live during the run.
+    agent_store.replace_runs(task["id"], agent["id"], out.get("runs", []) or [])
     propagate_to_master_kb(kb_writes, agent, ctx, task_id=task["id"])
 
 

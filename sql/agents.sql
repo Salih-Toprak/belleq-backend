@@ -28,11 +28,13 @@ CREATE TABLE IF NOT EXISTS public.agents (
   kb_scope           text NOT NULL DEFAULT 'scoped',-- master | scoped | both
   kb_section_ids     jsonb NOT NULL DEFAULT '[]'::jsonb,
   connector_ids      jsonb NOT NULL DEFAULT '[]'::jsonb,
-  provider           text NOT NULL DEFAULT 'belleq',-- belleq | byok
-  api_key_encrypted  text,                          -- Fernet ciphertext; BYOK only; never returned
+  provider           text NOT NULL DEFAULT 'belleq',-- belleq | byok | openrouter
+  api_key_encrypted  text,                          -- Fernet ciphertext; BYOK/openrouter only; never returned
   model              text NOT NULL DEFAULT '',      -- e.g. claude-sonnet-4-6, gpt-4o
   budget_limit_usd   double precision,              -- max spend/day; null = unlimited
   status             text NOT NULL DEFAULT 'active',-- active | paused | archived
+  notify_url         text,                          -- webhook fired on run completion/failure (Slack/Discord/Zapier-compatible)
+  notify_email       text,                          -- optional email notification (requires backend SMTP)
   created_at         timestamptz NOT NULL DEFAULT now(),
   updated_at         timestamptz NOT NULL DEFAULT now()
 );
@@ -49,6 +51,7 @@ CREATE TABLE IF NOT EXISTS public.agent_tasks (
   instruction   text NOT NULL DEFAULT '',
   status        text NOT NULL DEFAULT 'pending',    -- pending | running | completed | failed
   trigger       text NOT NULL DEFAULT 'manual',     -- manual | <cron expr> | webhook
+  run_token     text,                               -- per-run secret authorizing live step callbacks
   result        text,
   kb_writes     jsonb NOT NULL DEFAULT '[]'::jsonb,
   tokens_used   integer NOT NULL DEFAULT 0,
@@ -102,3 +105,9 @@ ALTER TABLE public.agents          ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.agent_tasks     ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.agent_runs      ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.kb_review_queue ENABLE ROW LEVEL SECURITY;
+
+-- ── migrations for existing deployments (idempotent) ─────────────────────────
+-- Run these if the tables already exist from an earlier version.
+ALTER TABLE public.agent_tasks ADD COLUMN IF NOT EXISTS run_token    text;
+ALTER TABLE public.agents      ADD COLUMN IF NOT EXISTS notify_url   text;
+ALTER TABLE public.agents      ADD COLUMN IF NOT EXISTS notify_email text;

@@ -49,6 +49,11 @@ def public_agent(row: dict[str, Any]) -> dict[str, Any]:
     return out
 
 
+def public_task(row: dict[str, Any]) -> dict[str, Any]:
+    """Task shape for API responses — strips the per-run callback token."""
+    return {k: v for k, v in row.items() if k != "run_token"}
+
+
 # ── agents ───────────────────────────────────────────────────────────────────
 def create_agent(row: dict[str, Any]) -> dict[str, Any]:
     sb = get_supabase()
@@ -176,6 +181,44 @@ def insert_runs(task_id: str, agent_id: str, steps: list[dict[str, Any]]) -> int
         }
         for i, s in enumerate(steps)
     ]
+    sb.table(RUNS).insert(rows).execute()
+    return len(rows)
+
+
+def _run_row(task_id: str, agent_id: str, step: dict[str, Any], fallback_no: int) -> dict[str, Any]:
+    return {
+        "task_id": task_id,
+        "agent_id": agent_id,
+        "step_number": int(step.get("step_number", fallback_no)),
+        "type": str(step.get("type", "")),
+        "input_summary": str(step.get("input_summary", ""))[:4000],
+        "output_summary": str(step.get("output_summary", ""))[:4000],
+    }
+
+
+def upsert_run_steps(task_id: str, agent_id: str, steps: list[dict[str, Any]]) -> int:
+    """Idempotently insert streamed steps (live progress): each step replaces any
+    existing row with the same (task_id, step_number) so re-sent flushes don't
+    duplicate. The final replace_runs() reconciles the authoritative set."""
+    if not steps:
+        return 0
+    sb = get_supabase()
+    numbers = sorted({int(s.get("step_number", i)) for i, s in enumerate(steps)})
+    if numbers:
+        sb.table(RUNS).delete().eq("task_id", task_id).in_("step_number", numbers).execute()
+    rows = [_run_row(task_id, agent_id, s, i) for i, s in enumerate(steps)]
+    sb.table(RUNS).insert(rows).execute()
+    return len(rows)
+
+
+def replace_runs(task_id: str, agent_id: str, steps: list[dict[str, Any]]) -> int:
+    """Delete any existing run rows for the task, then insert the authoritative
+    final set. Makes final persistence idempotent regardless of live streaming."""
+    sb = get_supabase()
+    sb.table(RUNS).delete().eq("task_id", task_id).execute()
+    if not steps:
+        return 0
+    rows = [_run_row(task_id, agent_id, s, i) for i, s in enumerate(steps)]
     sb.table(RUNS).insert(rows).execute()
     return len(rows)
 
