@@ -26,7 +26,7 @@ RUNS = "agent_runs"
 REVIEW = "kb_review_queue"
 
 # Stripped from every agent payload returned to a client.
-_AGENT_SECRET_FIELDS = {"api_key_encrypted"}
+_AGENT_SECRET_FIELDS = {"api_key_encrypted", "telegram_bot_token_encrypted", "telegram_secret"}
 
 
 def _now() -> str:
@@ -46,6 +46,7 @@ def public_agent(row: dict[str, Any]) -> dict[str, Any]:
     """
     out = {k: v for k, v in row.items() if k not in _AGENT_SECRET_FIELDS}
     out["has_api_key"] = bool((row.get("api_key_encrypted") or "").strip())
+    out["has_telegram_token"] = bool((row.get("telegram_bot_token_encrypted") or "").strip())
     return out
 
 
@@ -108,6 +109,14 @@ def get_agent_decrypted_key(row: dict[str, Any]) -> str:
     return decrypt_secret(row.get("api_key_encrypted") or "")
 
 
+def get_agent_telegram_token(row: dict[str, Any]) -> str:
+    """Decrypt the agent's Telegram bot token (two-way chat). Empty if unset."""
+    from crypto import decrypt_secret
+
+    enc = row.get("telegram_bot_token_encrypted") or ""
+    return decrypt_secret(enc) if enc else ""
+
+
 # ── tasks ────────────────────────────────────────────────────────────────────
 def create_task(row: dict[str, Any]) -> dict[str, Any]:
     sb = get_supabase()
@@ -131,6 +140,33 @@ def get_owned_task(task_id: str, workspace_id: str) -> dict[str, Any] | None:
         .maybe_single()
         .execute()
     ).data
+
+
+def fail_orphaned_running_tasks() -> int:
+    """Mark tasks left in 'running' as failed.
+
+    A run executes inside a backend background task that POSTs to the container.
+    If the backend restarts mid-run (deploy/crash) that task dies and nobody ever
+    flips the row to completed/failed — so it shows 'running' forever. Called on
+    startup to clear those (the container run can't be resumed; the user re-runs).
+    """
+    sb = get_supabase()
+    res = (
+        sb.table(TASKS)
+        .update(
+            {
+                "status": "failed",
+                "result": "Run was interrupted by a server restart. Please run it again.",
+                "completed_at": _now(),
+            }
+        )
+        .eq("status", "running")
+        .execute()
+    )
+    n = len(res.data or [])
+    if n:
+        logger.info("orphaned_running_tasks_failed count=%s", n)
+    return n
 
 
 def list_tasks(agent_id: str, workspace_id: str) -> list[dict[str, Any]]:

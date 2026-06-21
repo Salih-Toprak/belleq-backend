@@ -8,11 +8,13 @@ is Fernet-encrypted before storage and is never returned by any serializer here
 from __future__ import annotations
 
 import logging
+import secrets as _secrets
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
 from auth import get_current_user
+from config import settings
 from crypto import encrypt_secret
 from routers.agent_common import (
     AGENT_STATUSES,
@@ -22,10 +24,30 @@ from routers.agent_common import (
     owned_context_or_404,
     validate_enum,
 )
-from services import agent_store
+from services import agent_store, telegram
 
 logger = logging.getLogger(__name__)
 router = APIRouter(tags=["agents"])
+
+
+def _sync_telegram_webhook(agent_row: dict) -> None:
+    """Register or remove the agent bot's Telegram webhook to match its config.
+
+    Best-effort: a webhook failure is logged, not fatal — the agent still saves.
+    """
+    token = agent_store.get_agent_telegram_token(agent_row)
+    secret = agent_row.get("telegram_secret") or ""
+    base = (getattr(settings, "BACKEND_PUBLIC_URL", "") or "").strip().rstrip("/")
+    if agent_row.get("telegram_enabled") and token and secret:
+        if not base:
+            logger.warning("telegram_webhook_skipped no BACKEND_PUBLIC_URL agent=%s", agent_row.get("id"))
+            return
+        url = f"{base}/internal/telegram/webhook/{agent_row['id']}"
+        ok, err = telegram.set_webhook(token, url, secret)
+        if not ok:
+            logger.warning("telegram_set_webhook_failed agent=%s err=%s", agent_row.get("id"), err)
+    elif token:
+        telegram.delete_webhook(token)
 
 
 class CreateAgentBody(BaseModel):
@@ -40,6 +62,9 @@ class CreateAgentBody(BaseModel):
     budget_limit_usd: float | None = None
     notify_enabled: bool = False  # message me via a communication connector
     notify_connector_ids: list[str] = Field(default_factory=list)
+    telegram_enabled: bool = False  # two-way chat with this agent on Telegram
+    telegram_bot_token: str = ""  # plaintext in; encrypted at rest, never returned
+    telegram_allowed_chats: list[str] = Field(default_factory=list)
 
 
 class UpdateAgentBody(BaseModel):
@@ -55,6 +80,9 @@ class UpdateAgentBody(BaseModel):
     status: str | None = None
     notify_enabled: bool | None = None
     notify_connector_ids: list[str] | None = None
+    telegram_enabled: bool | None = None
+    telegram_bot_token: str | None = None  # set to (re)set; "" clears it
+    telegram_allowed_chats: list[str] | None = None
 
 
 @router.post("/contexts/{context_id}/agents", status_code=201)
@@ -88,9 +116,16 @@ async def create_agent(
         "budget_limit_usd": body.budget_limit_usd,
         "notify_enabled": body.notify_enabled,
         "notify_connector_ids": body.notify_connector_ids,
+        "telegram_enabled": body.telegram_enabled,
+        "telegram_bot_token_encrypted": (
+            encrypt_secret(body.telegram_bot_token) if body.telegram_bot_token.strip() else None
+        ),
+        "telegram_secret": _secrets.token_urlsafe(24) if body.telegram_enabled else None,
+        "telegram_allowed_chats": body.telegram_allowed_chats,
         "status": "active",
     }
     created = agent_store.create_agent(row)
+    _sync_telegram_webhook(created)
     logger.info("agent_created id=%s ctx=%s ws=%s", created["id"], context_id, ws)
     return agent_store.public_agent(created)
 
@@ -149,6 +184,17 @@ async def update_agent(
         patch["notify_enabled"] = body.notify_enabled
     if body.notify_connector_ids is not None:
         patch["notify_connector_ids"] = body.notify_connector_ids
+    if body.telegram_allowed_chats is not None:
+        patch["telegram_allowed_chats"] = body.telegram_allowed_chats
+    if body.telegram_bot_token is not None:
+        patch["telegram_bot_token_encrypted"] = (
+            encrypt_secret(body.telegram_bot_token) if body.telegram_bot_token.strip() else None
+        )
+    if body.telegram_enabled is not None:
+        patch["telegram_enabled"] = body.telegram_enabled
+        # Mint a webhook secret the first time chat is turned on.
+        if body.telegram_enabled and not (agent.get("telegram_secret") or "").strip():
+            patch["telegram_secret"] = _secrets.token_urlsafe(24)
     # Key rotation: a provided api_key is (re)encrypted; "" clears it.
     if body.api_key is not None:
         patch["api_key_encrypted"] = encrypt_secret(body.api_key) if body.api_key.strip() else None
@@ -166,6 +212,9 @@ async def update_agent(
             raise HTTPException(status_code=422, detail=f"{final_provider} provider requires an api_key")
 
     updated = agent_store.update_agent(agent_id, patch)
+    # Register/unregister the Telegram webhook to match the new config.
+    if any(k.startswith("telegram_") for k in patch):
+        _sync_telegram_webhook(updated or agent)
     return agent_store.public_agent(updated or agent)
 
 

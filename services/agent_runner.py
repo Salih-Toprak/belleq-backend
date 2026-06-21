@@ -184,6 +184,7 @@ async def trigger_run(task_id: str) -> None:
         out = resp.json()
 
         _persist_result(task, agent, ctx, out)
+        _reply_telegram(agent, task, out)
         await _fire_notification(agent, task, ctx, host, out)
         logger.info(
             "agent_run_complete task=%s agent=%s status=%s cost=%.4f",
@@ -219,6 +220,23 @@ def _messaging_connector_ids(agent: dict) -> list[str]:
         if any(h in hay for h in _MESSAGING_HINTS):
             out.append(cid)
     return out
+
+
+def _reply_telegram(agent: dict, task: dict, out: dict) -> None:
+    """For a two-way Telegram run, reply to the originating chat with the result.
+    Uses the agent's own (backend-decryptable) bot token. Best-effort."""
+    if task.get("trigger") != "telegram":
+        return
+    chat = (task.get("reply_chat") or "").strip()
+    if not chat:
+        return
+    token = agent_store.get_agent_telegram_token(agent)
+    if not token:
+        return
+    text = (out.get("result") or out.get("final_text") or "").strip() or "(no reply)"
+    from services import telegram
+
+    telegram.send_message(token, chat, text)
 
 
 async def _fire_notification(agent: dict, task: dict, ctx: dict, host: dict, out: dict) -> None:

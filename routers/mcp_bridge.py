@@ -66,22 +66,27 @@ def _resolve_context(context_id: str) -> str | None:
     and the container name the aggregator serves.
     """
     sb = get_supabase()
-    ctx = (
+    # NB: maybe_single().execute() returns None (not a response) when no row
+    # matches — guard with `res.data if res else None` (see _resolve_environment),
+    # or `.data` raises AttributeError on None and the bridge 500s.
+    res = (
         sb.table("containers")
         .select("container_name, host_id")
         .eq("id", context_id)
         .maybe_single()
         .execute()
-    ).data
+    )
+    ctx = res.data if res else None
     if not ctx or not ctx.get("host_id"):
         return None
-    host = (
+    hres = (
         sb.table("hosts")
         .select("master_endpoint, public_ip")
         .eq("id", ctx["host_id"])
         .maybe_single()
         .execute()
-    ).data
+    )
+    host = hres.data if hres else None
     if not host:
         return None
     endpoint = host.get("master_endpoint") or (f"http://{host.get('public_ip')}:9000")
@@ -157,13 +162,14 @@ def _resolve_workspace(workspace_id: str) -> str | None:
     ).data or []
     if not ctxs:
         return None
-    host = (
+    hres = (
         sb.table("hosts")
         .select("master_endpoint, public_ip")
         .eq("id", ctxs[0]["host_id"])
         .maybe_single()
         .execute()
-    ).data
+    )
+    host = hres.data if hres else None
     if not host:
         return None
     endpoint = host.get("master_endpoint") or (f"http://{host.get('public_ip')}:9000")
