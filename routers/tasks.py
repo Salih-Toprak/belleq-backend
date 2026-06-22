@@ -119,6 +119,30 @@ async def get_task_runs(task_id: str, user: dict = Depends(get_current_user)):
     return agent_store.list_runs_for_task(task_id)
 
 
+@router.delete("/tasks/{task_id}")
+async def delete_task(task_id: str, user: dict = Depends(get_current_user)):
+    """Delete one task run and its step log. A running task must be stopped first
+    (use cancel); a recurring/one-time schedule is unregistered when removed."""
+    task = agent_store.get_owned_task(task_id, user["id"])
+    if not task:
+        raise HTTPException(status_code=404, detail="Task not found")
+    if task.get("status") == "running":
+        raise HTTPException(status_code=409, detail="Stop the run before deleting it")
+    if agent_scheduler.is_cron(task.get("trigger", "")):
+        agent_scheduler.unregister_task(task_id)
+    agent_store.delete_task(task_id)
+    return {"id": task_id, "deleted": True}
+
+
+@router.delete("/agents/{agent_id}/tasks")
+async def clear_finished_tasks(agent_id: str, user: dict = Depends(get_current_user)):
+    """Clear the agent's finished run history (completed/failed/cancelled).
+    Pending/running tasks and recurring schedule templates are kept."""
+    _owned_agent_or_404(agent_id, user["id"])
+    n = agent_store.delete_finished_tasks(agent_id)
+    return {"deleted": n}
+
+
 @router.post("/webhooks/agents/{agent_id}")
 async def agent_webhook(agent_id: str, request: Request):
     """Public webhook trigger. Creates a task from the agent's configuration and
