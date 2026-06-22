@@ -169,6 +169,32 @@ def fail_orphaned_running_tasks() -> int:
     return n
 
 
+def delete_task(task_id: str) -> None:
+    """Delete one task and its step log."""
+    sb = get_supabase()
+    sb.table(RUNS).delete().eq("task_id", task_id).execute()
+    sb.table(TASKS).delete().eq("id", task_id).execute()
+
+
+def delete_finished_tasks(agent_id: str) -> int:
+    """Clear an agent's finished run history (completed/failed/cancelled) and
+    their step logs. Leaves pending/running tasks (incl. recurring templates)."""
+    sb = get_supabase()
+    rows = (
+        sb.table(TASKS)
+        .select("id")
+        .eq("agent_id", agent_id)
+        .in_("status", ["completed", "failed", "cancelled"])
+        .execute()
+    ).data or []
+    ids = [r["id"] for r in rows]
+    if not ids:
+        return 0
+    sb.table(RUNS).delete().in_("task_id", ids).execute()
+    sb.table(TASKS).delete().in_("id", ids).execute()
+    return len(ids)
+
+
 def list_tasks(agent_id: str, workspace_id: str) -> list[dict[str, Any]]:
     sb = get_supabase()
     return (
