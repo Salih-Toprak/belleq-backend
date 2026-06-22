@@ -31,10 +31,11 @@ from services import agent_store, connector_store
 
 logger = logging.getLogger(__name__)
 
-# Generous: a multi-step agentic loop with several tool/LLM calls can run for a
-# while. The HTTP call is made from a background task, so it never blocks a
-# user-facing request.
-RUN_TIMEOUT = 600.0
+# A multi-step agentic loop can run for a long time — no read timeout, so the
+# backend waits as long as the run takes (it's a background task, never blocking a
+# user request). Connect/write are still bounded so a dead host fails fast; any
+# error is caught in trigger_run and marks the task failed.
+RUN_TIMEOUT = httpx.Timeout(30.0, read=None)
 
 
 class BudgetExceededException(Exception):
