@@ -345,7 +345,10 @@ async def write_to_context_kb(context_id: str, content: str, tags: list[str]) ->
     target = f"{host['master_endpoint']}/master/kb/{_ctx['container_name']}/agent_write"
     headers = {"X-Admin-Key": host["master_api_key"], "Content-Type": "application/json"}
     body = {"content": content, "tags": tags, "scope": "shared", "source": "kb-review-approved"}
-    async with httpx.AsyncClient(timeout=60.0) as client:
+    # Generous read timeout: embedding + Qdrant upsert can take a while, and it
+    # must exceed the master→container read timeout (120s) so this outer hop
+    # doesn't cut off first.
+    async with httpx.AsyncClient(timeout=httpx.Timeout(15.0, read=150.0)) as client:
         resp = await client.post(target, json=body, headers=headers)
     if resp.status_code >= 400:
         raise RuntimeError(f"KB write failed {resp.status_code}: {resp.text[:300]}")
