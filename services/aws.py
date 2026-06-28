@@ -68,6 +68,14 @@ if [ -n "{github_token}" ]; then
   echo "{github_token}" | docker login ghcr.io -u x-access-token --password-stdin || true
 fi
 
+# ── Reclaim disk before pulling ───────────────────────────────────────────────
+# Old image layers (master/user/ollama versions) accumulate on the host; a full
+# disk makes `docker compose pull` fail silently ("no space left on device") and
+# leaves the stack pinned to stale cached images. Prune unused images + build
+# cache first (volumes are NOT touched, so Qdrant/Ollama data survives).
+docker image prune -af || true
+docker builder prune -af || true
+
 # ── Start the stack ──────────────────────────────────────────────────────────
 # Pull the prebuilt master image from GHCR instead of building from source on
 # every boot (faster, and avoids re-resolving Python deps per environment).
